@@ -45,7 +45,7 @@ type collectionResponse struct {
 
 func (s *Server) handleAPICollection(w http.ResponseWriter, r *http.Request) {
 	items := make([]collectionItem, 0, len(s.collection.Order))
-	for _, name := range s.collection.Order {
+	for name := range s.collection.All() {
 		items = append(items, collectionItem{Name: name, Type: "mapping"})
 	}
 	writeJSON(w, collectionResponse{Items: items})

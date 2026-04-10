@@ -10,7 +10,7 @@ import (
 // It errors if tokens remain unconsumed after the program.
 func Parse(tokens []token.Token) (Program, error) {
 	p := programP()
-	r := p.Parse(tokens)
+	r := p(tokens)
 	val, err := r.Unwrap()
 	if err != nil {
 		return Program{}, err

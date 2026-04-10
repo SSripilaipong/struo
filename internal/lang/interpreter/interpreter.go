@@ -2,6 +2,7 @@ package interpreter
 
 import (
 	"fmt"
+	"iter"
 	"struo/internal/lang/parser"
 )
 
@@ -19,6 +20,17 @@ func (MappingVal) valueTag() {}
 type Collection struct {
 	Bindings map[string]Value
 	Order    []string // preserves definition order
+}
+
+// All yields (name, value) pairs in definition order.
+func (c *Collection) All() iter.Seq2[string, Value] {
+	return func(yield func(string, Value) bool) {
+		for _, name := range c.Order {
+			if !yield(name, c.Bindings[name]) {
+				return
+			}
+		}
+	}
 }
 
 // Interpret evaluates a parsed Program into a Collection.

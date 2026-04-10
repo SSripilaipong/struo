@@ -7,20 +7,10 @@ import (
 	"struo/internal/lang/tuple"
 )
 
-type Parser[R any] interface {
-	Parse([]token.Token) result.Result[tuple.Of2[R, []token.Token]]
-}
-
-type ParserFunc[R any] struct {
-	fn func([]token.Token) result.Result[tuple.Of2[R, []token.Token]]
-}
-
-func (p ParserFunc[R]) Parse(tokens []token.Token) result.Result[tuple.Of2[R, []token.Token]] {
-	return p.fn(tokens)
-}
+type Parser[R any] = func([]token.Token) result.Result[tuple.Of2[R, []token.Token]]
 
 func Satisfy(pred func(token.Token) bool) Parser[token.Token] {
-	return ParserFunc[token.Token]{fn: func(tokens []token.Token) result.Result[tuple.Of2[token.Token, []token.Token]] {
+	return func(tokens []token.Token) result.Result[tuple.Of2[token.Token, []token.Token]] {
 		if len(tokens) == 0 || tokens[0].Type == token.EOF {
 			return result.Err[tuple.Of2[token.Token, []token.Token]](fmt.Errorf("unexpected end of input"))
 		}
@@ -30,88 +20,88 @@ func Satisfy(pred func(token.Token) bool) Parser[token.Token] {
 		return result.Err[tuple.Of2[token.Token, []token.Token]](
 			fmt.Errorf("unexpected token %q at line %d col %d", tokens[0].Lexeme, tokens[0].Line, tokens[0].Column),
 		)
-	}}
+	}
 }
 
 func Map[A, B any](f func(A) B, p Parser[A]) Parser[B] {
-	return ParserFunc[B]{fn: func(tokens []token.Token) result.Result[tuple.Of2[B, []token.Token]] {
-		r := p.Parse(tokens)
+	return func(tokens []token.Token) result.Result[tuple.Of2[B, []token.Token]] {
+		r := p(tokens)
 		val, err := r.Unwrap()
 		if err != nil {
 			return result.Err[tuple.Of2[B, []token.Token]](err)
 		}
 		return result.Ok(tuple.T2(f(val.V1), val.V2))
-	}}
+	}
 }
 
 func Sequence2[A, B any](a Parser[A], b Parser[B]) Parser[tuple.Of2[A, B]] {
-	return ParserFunc[tuple.Of2[A, B]]{fn: func(tokens []token.Token) result.Result[tuple.Of2[tuple.Of2[A, B], []token.Token]] {
-		ra := a.Parse(tokens)
+	return func(tokens []token.Token) result.Result[tuple.Of2[tuple.Of2[A, B], []token.Token]] {
+		ra := a(tokens)
 		va, err := ra.Unwrap()
 		if err != nil {
 			return result.Err[tuple.Of2[tuple.Of2[A, B], []token.Token]](err)
 		}
-		rb := b.Parse(va.V2)
+		rb := b(va.V2)
 		vb, err := rb.Unwrap()
 		if err != nil {
 			return result.Err[tuple.Of2[tuple.Of2[A, B], []token.Token]](err)
 		}
 		return result.Ok(tuple.T2(tuple.T2(va.V1, vb.V1), vb.V2))
-	}}
+	}
 }
 
 func Sequence3[A, B, C any](a Parser[A], b Parser[B], c Parser[C]) Parser[tuple.Of3[A, B, C]] {
-	return ParserFunc[tuple.Of3[A, B, C]]{fn: func(tokens []token.Token) result.Result[tuple.Of2[tuple.Of3[A, B, C], []token.Token]] {
-		ra := a.Parse(tokens)
+	return func(tokens []token.Token) result.Result[tuple.Of2[tuple.Of3[A, B, C], []token.Token]] {
+		ra := a(tokens)
 		va, err := ra.Unwrap()
 		if err != nil {
 			return result.Err[tuple.Of2[tuple.Of3[A, B, C], []token.Token]](err)
 		}
-		rb := b.Parse(va.V2)
+		rb := b(va.V2)
 		vb, err := rb.Unwrap()
 		if err != nil {
 			return result.Err[tuple.Of2[tuple.Of3[A, B, C], []token.Token]](err)
 		}
-		rc := c.Parse(vb.V2)
+		rc := c(vb.V2)
 		vc, err := rc.Unwrap()
 		if err != nil {
 			return result.Err[tuple.Of2[tuple.Of3[A, B, C], []token.Token]](err)
 		}
 		return result.Ok(tuple.T2(tuple.T3(va.V1, vb.V1, vc.V1), vc.V2))
-	}}
+	}
 }
 
 func Choice[A any](parsers ...Parser[A]) Parser[A] {
-	return ParserFunc[A]{fn: func(tokens []token.Token) result.Result[tuple.Of2[A, []token.Token]] {
+	return func(tokens []token.Token) result.Result[tuple.Of2[A, []token.Token]] {
 		var lastErr error
 		for _, p := range parsers {
-			r := p.Parse(tokens)
+			r := p(tokens)
 			if r.IsOk() {
 				return r
 			}
 			_, lastErr = r.Unwrap()
 		}
 		return result.Err[tuple.Of2[A, []token.Token]](lastErr)
-	}}
+	}
 }
 
 func Optional[A any](p Parser[A]) Parser[*A] {
-	return ParserFunc[*A]{fn: func(tokens []token.Token) result.Result[tuple.Of2[*A, []token.Token]] {
-		r := p.Parse(tokens)
+	return func(tokens []token.Token) result.Result[tuple.Of2[*A, []token.Token]] {
+		r := p(tokens)
 		if r.IsOk() {
 			val, _ := r.Unwrap()
 			return result.Ok(tuple.T2(&val.V1, val.V2))
 		}
 		return result.Ok(tuple.T2((*A)(nil), tokens))
-	}}
+	}
 }
 
 func RepeatAnyTimes[A any](p Parser[A]) Parser[[]A] {
-	return ParserFunc[[]A]{fn: func(tokens []token.Token) result.Result[tuple.Of2[[]A, []token.Token]] {
+	return func(tokens []token.Token) result.Result[tuple.Of2[[]A, []token.Token]] {
 		var items []A
 		remaining := tokens
 		for {
-			r := p.Parse(remaining)
+			r := p(remaining)
 			if !r.IsOk() {
 				break
 			}
@@ -120,18 +110,18 @@ func RepeatAnyTimes[A any](p Parser[A]) Parser[[]A] {
 			remaining = val.V2
 		}
 		return result.Ok(tuple.T2(items, remaining))
-	}}
+	}
 }
 
 func RepeatOneOrMore[A any](p Parser[A]) Parser[[]A] {
-	return ParserFunc[[]A]{fn: func(tokens []token.Token) result.Result[tuple.Of2[[]A, []token.Token]] {
-		r := RepeatAnyTimes(p).Parse(tokens)
+	return func(tokens []token.Token) result.Result[tuple.Of2[[]A, []token.Token]] {
+		r := RepeatAnyTimes(p)(tokens)
 		val, _ := r.Unwrap()
 		if len(val.V1) == 0 {
 			return result.Err[tuple.Of2[[]A, []token.Token]](fmt.Errorf("expected at least one match"))
 		}
 		return r
-	}}
+	}
 }
 
 func wsTokenP() Parser[token.Token] {
