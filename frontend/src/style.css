@@ -1,0 +1,202 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #f5f3ff;
+  --surface: #ffffff;
+  --text: #1e1b4b;
+  --text-secondary: #4c4882;
+  --muted: #6b7280;
+  --border: #e5e3f7;
+  --accent: #7c3aed;
+  --accent-soft: #ede9fe;
+  --radius: 14px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-hover: 0 4px 12px rgba(124, 58, 237, 0.12), 0 2px 4px rgba(0, 0, 0, 0.06);
+  --font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Collection page ────────────────────────────────── */
+
+.collection {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+
+.collection-header {
+  margin-bottom: 2.5rem;
+}
+
+.collection-wordmark {
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+  margin-bottom: 0.25rem;
+}
+
+.collection-title {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text);
+}
+
+.collection-subtitle {
+  margin-top: 0.375rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.collection-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.collection-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  text-decoration: none;
+  color: var(--text);
+  box-shadow: var(--shadow);
+  transition: box-shadow 0.15s ease, transform 0.1s ease, border-color 0.15s ease;
+  cursor: pointer;
+}
+
+.collection-card:hover {
+  box-shadow: var(--shadow-hover);
+  border-color: #c4b5fd;
+  transform: translateY(-1px);
+}
+
+.card-name {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+.card-badge {
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.65rem;
+  border-radius: 99px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ── Mapping / graph page ───────────────────────────── */
+
+.mapping-page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem;
+}
+
+.mapping-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 0.1s;
+}
+
+.back-link:hover {
+  color: var(--accent);
+}
+
+.mapping-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+.mapping-type-badge {
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.65rem;
+  border-radius: 99px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.graph-container {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.graph-container svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.graph-node-label {
+  font-size: 13px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-weight: 600;
+  fill: var(--text);
+  pointer-events: none;
+  user-select: none;
+}
+
+.graph-edge {
+  stroke: #94a3b8;
+  stroke-width: 1.5;
+  fill: none;
+}
+
+/* ── Empty / error states ───────────────────────────── */
+
+.empty-state {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.error-state {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: #b91c1c;
+  font-size: 0.9rem;
+}
