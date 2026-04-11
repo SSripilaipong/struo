@@ -1,13 +1,13 @@
 import { escapeHtml } from '../utils.js'
 
-interface MappingEntry {
+interface ArrowEntry {
   from: string
   to: string
 }
 
-interface MappingResponse {
+interface ArrowsResponse {
   name: string
-  entries: MappingEntry[]
+  entries: ArrowEntry[]
 }
 
 // Pastel node fill palette
@@ -35,7 +35,7 @@ const CY = 250
 const ORBIT_R = 155
 const VIEWBOX = '0 0 500 500'
 
-class StruoMapping extends HTMLElement {
+class StruoArrows extends HTMLElement {
   static get observedAttributes(): string[] {
     return ['name']
   }
@@ -47,10 +47,10 @@ class StruoMapping extends HTMLElement {
   private async render(): Promise<void> {
     const name = this.getAttribute('name') ?? ''
 
-    let data: MappingResponse
+    let data: ArrowsResponse
 
     try {
-      const res = await fetch(`/api/mapping/${encodeURIComponent(name)}`)
+      const res = await fetch(`/api/arrows/${encodeURIComponent(name)}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       data = await res.json()
     } catch {
@@ -59,7 +59,7 @@ class StruoMapping extends HTMLElement {
           <nav class="mapping-nav">
             <a class="back-link" href="/">← collection</a>
           </nav>
-          <div class="error-state">Mapping "${escapeHtml(name)}" not found.</div>
+          <div class="error-state">Arrows "${escapeHtml(name)}" not found.</div>
         </div>
       `
       return
@@ -72,7 +72,7 @@ class StruoMapping extends HTMLElement {
         <nav class="mapping-nav">
           <a class="back-link" href="/">← collection</a>
           <h1 class="mapping-title">${escapeHtml(data.name)}</h1>
-          <span class="mapping-type-badge">mapping</span>
+          <span class="mapping-type-badge">arrows</span>
         </nav>
         <div class="graph-container">${svg}</div>
       </div>
@@ -80,7 +80,7 @@ class StruoMapping extends HTMLElement {
   }
 }
 
-function buildGraph(entries: MappingEntry[]): string {
+function buildGraph(entries: ArrowEntry[]): string {
   // Collect unique nodes in order of appearance.
   const nodeOrder: string[] = []
   const nodeSet = new Set<string>()
@@ -111,11 +111,9 @@ function buildGraph(entries: MappingEntry[]): string {
     const to = pos.get(e.to)!
 
     if (e.from === e.to) {
-      // Self-loop: small arc above the node.
       return selfLoop(from.x, from.y)
     }
 
-    // Straight edge with arrow, offset by node radius at each end.
     const dx = to.x - from.x
     const dy = to.y - from.y
     const len = Math.sqrt(dx * dx + dy * dy)
@@ -124,7 +122,7 @@ function buildGraph(entries: MappingEntry[]): string {
 
     const sx = Math.round(from.x + ux * NODE_R)
     const sy = Math.round(from.y + uy * NODE_R)
-    const ex = Math.round(to.x - ux * (NODE_R + 6)) // +6 for arrowhead
+    const ex = Math.round(to.x - ux * (NODE_R + 6))
     const ey = Math.round(to.y - uy * (NODE_R + 6))
 
     return `<line class="graph-edge" x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" marker-end="url(#arrow)"/>`
@@ -153,7 +151,6 @@ function buildGraph(entries: MappingEntry[]): string {
 }
 
 function selfLoop(cx: number, cy: number): string {
-  // A small loop arc above the node using a cubic bezier.
   const r = 22
   const x1 = cx - r / 2
   const y1 = cy - NODE_R + 4
@@ -164,4 +161,4 @@ function selfLoop(cx: number, cy: number): string {
   return `<path class="graph-edge" d="M ${x1} ${y1} C ${cpx - 24} ${cpy}, ${cpx + 24} ${cpy}, ${x2} ${y2}" marker-end="url(#arrow)"/>`
 }
 
-customElements.define('struo-mapping', StruoMapping)
+customElements.define('struo-arrows', StruoArrows)

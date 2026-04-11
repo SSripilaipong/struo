@@ -39,14 +39,14 @@ class StruoCollection extends HTMLElement {
       return
     }
 
-    const cards = data.items.map((item) => `
-      <li>
-        <a class="collection-card" href="/_mapping/${encodeURIComponent(item.name)}">
-          <span class="card-name">${escapeHtml(item.name)}</span>
-          <span class="card-badge">${escapeHtml(item.type)}</span>
-        </a>
-      </li>
-    `).join('')
+    const cards = data.items.map((item) => {
+      const href = itemHref(item)
+      const inner = `<span class="card-name">${escapeHtml(item.name)}</span><span class="card-badge">${escapeHtml(item.type)}</span>`
+      const card = href
+        ? `<a class="collection-card" href="${href}">${inner}</a>`
+        : `<div class="collection-card collection-card--static">${inner}</div>`
+      return `<li>${card}</li>`
+    }).join('')
 
     this.innerHTML = `
       <div class="collection">
@@ -58,6 +58,15 @@ class StruoCollection extends HTMLElement {
         <ul class="collection-list">${cards}</ul>
       </div>
     `
+  }
+}
+
+function itemHref(item: CollectionItem): string | null {
+  switch (item.type) {
+    case 'arrows': return `/_arrows/${encodeURIComponent(item.name)}`
+    case 'set':    return `/_set/${encodeURIComponent(item.name)}`
+    case 'graph':  return `/_graph/${encodeURIComponent(item.name)}`
+    default:       return null
   }
 }
 

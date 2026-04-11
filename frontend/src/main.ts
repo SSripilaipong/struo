@@ -1,3 +1,5 @@
 import './style.css'
 import './components/struo-collection'
-import './components/struo-mapping'
+import './components/struo-arrows'
+import './components/struo-set'
+import './components/struo-graph'

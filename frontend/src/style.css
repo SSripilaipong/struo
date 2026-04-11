@@ -185,6 +185,52 @@ html, body {
   fill: none;
 }
 
+/* ── Static (non-clickable) collection card ─────────── */
+
+.collection-card--static {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.collection-card--static:hover {
+  box-shadow: var(--shadow);
+  border-color: var(--border);
+  transform: none;
+}
+
+/* ── Set list ───────────────────────────────────────── */
+
+.set-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 1.5rem;
+}
+
+.set-element {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0.4rem 1rem;
+  border-radius: 99px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid #c4b5fd;
+}
+
+.set-empty {
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 1.5rem;
+}
+
+/* ── Graph legend ───────────────────────────────────── */
+
+.graph-legend text {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
 /* ── Empty / error states ───────────────────────────── */
 
 .empty-state {

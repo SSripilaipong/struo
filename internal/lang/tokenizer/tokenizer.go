@@ -94,6 +94,11 @@ func Tokenize(source string) ([]token.Token, error) {
 			col++
 			tokens = append(tokens, makeToken(token.COMMA, ",", startLine, startCol))
 
+		case r == ':':
+			s.advance()
+			col++
+			tokens = append(tokens, makeToken(token.COLON, ":", startLine, startCol))
+
 		case r == '-':
 			s.advance()
 			col++

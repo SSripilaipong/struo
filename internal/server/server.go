@@ -23,9 +23,13 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", s.handleIndex)
-	mux.HandleFunc("GET /_mapping/{name}", s.handleMappingPage)
+	mux.HandleFunc("GET /_arrows/{name}", s.handleArrowsPage)
+	mux.HandleFunc("GET /_set/{name}", s.handleSetPage)
+	mux.HandleFunc("GET /_graph/{name}", s.handleGraphPage)
 	mux.HandleFunc("GET /api/collection", s.handleAPICollection)
-	mux.HandleFunc("GET /api/mapping/{name}", s.handleAPIMapping)
+	mux.HandleFunc("GET /api/arrows/{name}", s.handleAPIArrows)
+	mux.HandleFunc("GET /api/set/{name}", s.handleAPISet)
+	mux.HandleFunc("GET /api/graph/{name}", s.handleAPIGraph)
 	mux.Handle("GET /assets/", http.FileServer(http.FS(s.static)))
 
 	return mux

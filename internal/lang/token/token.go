@@ -9,6 +9,7 @@ const (
 	RBRACE                      // }
 	ARROW                       // ->
 	COMMA                       // ,
+	COLON                       // :
 	WHITESPACE                  // spaces/tabs
 	NEWLINE                     // \n
 	EOF
