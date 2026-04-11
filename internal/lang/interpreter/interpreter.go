@@ -9,9 +9,25 @@ import (
 // Value is the runtime value interface.
 type Value interface{ valueTag() }
 
+// ArrowEntry is a single directed edge with an optional label.
+type ArrowEntry struct {
+	Label *string
+	From  string
+	To    string
+}
+
+// ArrowVal holds a single evaluated arrow.
+type ArrowVal struct {
+	Label *string
+	From  string
+	To    string
+}
+
+func (ArrowVal) valueTag() {}
+
 // ArrowsVal holds the evaluated entries of an arrows literal.
 type ArrowsVal struct {
-	Entries []parser.ArrowEntry
+	Entries []ArrowEntry
 }
 
 func (ArrowsVal) valueTag() {}
@@ -23,23 +39,10 @@ type SetVal struct {
 
 func (SetVal) valueTag() {}
 
-// ArrowsCollectionEntry is a named arrows set within an ArrowsCollectionVal.
-type ArrowsCollectionEntry struct {
-	Name   string
-	Arrows ArrowsVal
-}
-
-// ArrowsCollectionVal holds a named collection of arrows sets.
-type ArrowsCollectionVal struct {
-	Entries []ArrowsCollectionEntry
-}
-
-func (ArrowsCollectionVal) valueTag() {}
-
-// GraphVal holds a graph with a set of objects and a collection of named arrows.
+// GraphVal holds a graph with a set of objects and a list of arrows.
 type GraphVal struct {
 	Objects []string
-	Arrows  []ArrowsCollectionEntry // preserves definition order
+	Arrows  []ArrowEntry
 }
 
 func (GraphVal) valueTag() {}
@@ -77,11 +80,16 @@ func Interpret(prog parser.Program) (*Collection, error) {
 	return c, nil
 }
 
-func evalExpr(expr parser.Expr, c *Collection) (Value, error) {
+func evalExpr(expr parser.Expr, _ *Collection) (Value, error) {
 	switch e := expr.(type) {
+	case parser.ArrowExpr:
+		return ArrowVal{Label: e.Label, From: e.From, To: e.To}, nil
+
 	case parser.ArrowsLiteral:
-		entries := make([]parser.ArrowEntry, len(e.Entries))
-		copy(entries, e.Entries)
+		entries := make([]ArrowEntry, len(e.Entries))
+		for i, ae := range e.Entries {
+			entries[i] = ArrowEntry{Label: ae.Label, From: ae.From, To: ae.To}
+		}
 		return ArrowsVal{Entries: entries}, nil
 
 	case parser.SetLiteral:
@@ -89,48 +97,16 @@ func evalExpr(expr parser.Expr, c *Collection) (Value, error) {
 		copy(elems, e.Elements)
 		return SetVal{Elements: elems}, nil
 
-	case parser.ArrowsCollectionLiteral:
-		entries := make([]ArrowsCollectionEntry, len(e.Entries))
-		for i, ace := range e.Entries {
-			arrowEntries := make([]parser.ArrowEntry, len(ace.Arrows.Entries))
-			copy(arrowEntries, ace.Arrows.Entries)
-			entries[i] = ArrowsCollectionEntry{
-				Name:   ace.Name,
-				Arrows: ArrowsVal{Entries: arrowEntries},
-			}
-		}
-		return ArrowsCollectionVal{Entries: entries}, nil
-
 	case parser.GraphExpr:
-		return evalGraphExpr(e, c)
+		objects := make([]string, len(e.Objects.Elements))
+		copy(objects, e.Objects.Elements)
+		arrows := make([]ArrowEntry, len(e.Arrows.Entries))
+		for i, ae := range e.Arrows.Entries {
+			arrows[i] = ArrowEntry{Label: ae.Label, From: ae.From, To: ae.To}
+		}
+		return GraphVal{Objects: objects, Arrows: arrows}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown expression type %T", e)
 	}
-}
-
-func evalGraphExpr(e parser.GraphExpr, c *Collection) (GraphVal, error) {
-	objRaw, ok := c.Bindings[e.ObjectsName]
-	if !ok {
-		return GraphVal{}, fmt.Errorf("undefined name %q (must be a set defined before this graph)", e.ObjectsName)
-	}
-	sv, ok := objRaw.(SetVal)
-	if !ok {
-		return GraphVal{}, fmt.Errorf("%q is not a set", e.ObjectsName)
-	}
-
-	arrRaw, ok := c.Bindings[e.ArrowsName]
-	if !ok {
-		return GraphVal{}, fmt.Errorf("undefined name %q (must be an arrows-collection defined before this graph)", e.ArrowsName)
-	}
-	acv, ok := arrRaw.(ArrowsCollectionVal)
-	if !ok {
-		return GraphVal{}, fmt.Errorf("%q is not an arrows-collection", e.ArrowsName)
-	}
-
-	objects := make([]string, len(sv.Elements))
-	copy(objects, sv.Elements)
-	arrows := make([]ArrowsCollectionEntry, len(acv.Entries))
-	copy(arrows, acv.Entries)
-	return GraphVal{Objects: objects, Arrows: arrows}, nil
 }

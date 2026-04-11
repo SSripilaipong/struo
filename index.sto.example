@@ -1,3 +1,6 @@
 # Example struo collection
-F = {a->b, b->c, a->c}
-G = {x->y, y->z}
+F = a->b
+G = fog: a->c
+Fs = {f: a->b, g: b->c}
+Xs = {a, b, c}
+MyGraph = graph{objects: {a,b,c}, arrows: {f: a->b, g: b->c, fog: a->c, d->e}}

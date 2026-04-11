@@ -30,6 +30,13 @@ func identTokenP() Parser[token.Token] {
 	return Satisfy(func(t token.Token) bool { return t.Type == token.IDENT })
 }
 
+// upperIdentTokenP matches identifiers that start with an uppercase letter (variable names).
+func upperIdentTokenP() Parser[token.Token] {
+	return Satisfy(func(t token.Token) bool {
+		return t.Type == token.IDENT && len(t.Lexeme) > 0 && t.Lexeme[0] >= 'A' && t.Lexeme[0] <= 'Z'
+	})
+}
+
 func identKeywordP(keyword string) Parser[token.Token] {
 	return Satisfy(func(t token.Token) bool { return t.Type == token.IDENT && t.Lexeme == keyword })
 }
@@ -60,47 +67,54 @@ func colonTokenP() Parser[token.Token] {
 
 // --- grammar rules ---
 
-// arrowEntryP parses: IDENT WS? '->' WS? IDENT
-func arrowEntryP() Parser[ArrowEntry] {
+// arrowExprP parses: (IDENT ':' WS?)? IDENT WS? '->' WS? IDENT
+// Optional label uses backtracking via Optional combinator.
+func arrowExprP() Parser[ArrowExpr] {
+	// label part: IDENT ':'  (Optional will backtrack if ':' is not found)
+	labelP := Map(
+		func(t tuple.Of2[token.Token, token.Token]) string { return t.V1.Lexeme },
+		Sequence2WithInlineWS(identTokenP(), colonTokenP()),
+	)
+	// from -> to
 	fromToP := Sequence2WithInlineWS(
 		identTokenP(),
 		Sequence2WithInlineWS(arrowTokenP(), identTokenP()),
 	)
 	return Map(
-		func(t tuple.Of2[token.Token, tuple.Of2[token.Token, token.Token]]) ArrowEntry {
-			return ArrowEntry{From: t.V1.Lexeme, To: t.V2.V2.Lexeme}
+		func(t tuple.Of2[*string, tuple.Of2[token.Token, tuple.Of2[token.Token, token.Token]]]) ArrowExpr {
+			return ArrowExpr{Label: t.V1, From: t.V2.V1.Lexeme, To: t.V2.V2.V2.Lexeme}
 		},
-		fromToP,
+		Sequence2WithInlineWS(Optional(labelP), fromToP),
 	)
 }
 
-// arrowEntriesP parses: arrowEntry (',' WS? arrowEntry)*
-func arrowEntriesP() Parser[[]ArrowEntry] {
-	tailEntryP := Map(
-		func(t tuple.Of2[token.Token, ArrowEntry]) ArrowEntry { return t.V2 },
-		Sequence2WithInlineWS(commaTokenP(), arrowEntryP()),
+// arrowExprsP parses: arrowExpr (',' WS? arrowExpr)*
+func arrowExprsP() Parser[[]ArrowExpr] {
+	tailP := Map(
+		func(t tuple.Of2[token.Token, ArrowExpr]) ArrowExpr { return t.V2 },
+		Sequence2WithInlineWS(commaTokenP(), arrowExprP()),
 	)
 	return Map(
-		func(t tuple.Of2[ArrowEntry, []ArrowEntry]) []ArrowEntry {
-			return append([]ArrowEntry{t.V1}, t.V2...)
+		func(t tuple.Of2[ArrowExpr, []ArrowExpr]) []ArrowExpr {
+			return append([]ArrowExpr{t.V1}, t.V2...)
 		},
-		Sequence2(arrowEntryP(), RepeatAnyTimes(tailEntryP)),
+		Sequence2(arrowExprP(), RepeatAnyTimes(tailP)),
 	)
 }
 
-// arrowsLiteralP parses: '{' WS? arrowEntries? WS? '}'
+// arrowsLiteralP parses: '{' WS? arrowExprs? WS? '}'
 func arrowsLiteralP() Parser[ArrowsLiteral] {
 	innerP := Map(
-		func(t tuple.Of2[[]token.Token, tuple.Of2[*[]ArrowEntry, []token.Token]]) []ArrowEntry {
+		func(t tuple.Of2[[]token.Token, tuple.Of2[*[]ArrowExpr, []token.Token]]) []ArrowExpr {
 			if t.V2.V1 == nil {
 				return nil
 			}
 			return *t.V2.V1
 		},
-		Sequence2(skipInlineWS(), Sequence2(Optional(arrowEntriesP()), skipInlineWS())),
+		Sequence2(skipInlineWS(), Sequence2(Optional(arrowExprsP()), skipInlineWS())),
 	)
 	return Map(
-		func(t tuple.Of3[token.Token, []ArrowEntry, token.Token]) ArrowsLiteral {
+		func(t tuple.Of3[token.Token, []ArrowExpr, token.Token]) ArrowsLiteral {
 			return ArrowsLiteral{Entries: t.V2}
 		},
 		Sequence3(lbraceTokenP(), innerP, rbraceTokenP()),
@@ -140,106 +154,63 @@ func setLiteralP() Parser[SetLiteral] {
 	)
 }
 
-// arrowsCollectionEntryP parses: IDENT WS? ':' WS? arrowsLiteral
-func arrowsCollectionEntryP() Parser[ArrowsCollectionEntry] {
-	return Map(
-		func(t tuple.Of2[token.Token, tuple.Of2[token.Token, ArrowsLiteral]]) ArrowsCollectionEntry {
-			return ArrowsCollectionEntry{Name: t.V1.Lexeme, Arrows: t.V2.V2}
-		},
-		Sequence2WithInlineWS(identTokenP(), Sequence2WithInlineWS(colonTokenP(), arrowsLiteralP())),
-	)
-}
-
-// arrowsCollectionEntriesP parses: acEntry (',' WS? acEntry)*
-func arrowsCollectionEntriesP() Parser[[]ArrowsCollectionEntry] {
-	tailP := Map(
-		func(t tuple.Of2[token.Token, ArrowsCollectionEntry]) ArrowsCollectionEntry { return t.V2 },
-		Sequence2WithInlineWS(commaTokenP(), arrowsCollectionEntryP()),
-	)
-	return Map(
-		func(t tuple.Of2[ArrowsCollectionEntry, []ArrowsCollectionEntry]) []ArrowsCollectionEntry {
-			return append([]ArrowsCollectionEntry{t.V1}, t.V2...)
-		},
-		Sequence2(arrowsCollectionEntryP(), RepeatAnyTimes(tailP)),
-	)
-}
-
-// arrowsCollectionLiteralP parses: '{' WS? acEntries? WS? '}'
-func arrowsCollectionLiteralP() Parser[ArrowsCollectionLiteral] {
-	innerP := Map(
-		func(t tuple.Of2[[]token.Token, tuple.Of2[*[]ArrowsCollectionEntry, []token.Token]]) []ArrowsCollectionEntry {
-			if t.V2.V1 == nil {
-				return nil
-			}
-			return *t.V2.V1
-		},
-		Sequence2(skipInlineWS(), Sequence2(Optional(arrowsCollectionEntriesP()), skipInlineWS())),
-	)
-	return Map(
-		func(t tuple.Of3[token.Token, []ArrowsCollectionEntry, token.Token]) ArrowsCollectionLiteral {
-			return ArrowsCollectionLiteral{Entries: t.V2}
-		},
-		Sequence3(lbraceTokenP(), innerP, rbraceTokenP()),
-	)
-}
-
-// graphExprP parses: 'Graph' '{' WS? 'Objects' ':' WS? IDENT WS? ',' WS? 'Arrows' ':' WS? IDENT WS? '}'
+// graphExprP parses: 'graph' '{' WS? 'objects' ':' WS? setLiteral WS? ',' WS? 'arrows' ':' WS? arrowsLiteral WS? '}'
 func graphExprP() Parser[GraphExpr] {
-	// Objects: <name>
+	// objects: <setLiteral>
 	objectsFieldP := Map(
-		func(t tuple.Of2[token.Token, tuple.Of2[token.Token, token.Token]]) string {
-			return t.V2.V2.Lexeme
+		func(t tuple.Of2[token.Token, tuple.Of2[token.Token, SetLiteral]]) SetLiteral {
+			return t.V2.V2
 		},
-		Sequence2WithInlineWS(identKeywordP("Objects"), Sequence2WithInlineWS(colonTokenP(), identTokenP())),
+		Sequence2WithInlineWS(identKeywordP("objects"), Sequence2WithInlineWS(colonTokenP(), setLiteralP())),
 	)
-	// Arrows: <name>
+	// arrows: <arrowsLiteral>
 	arrowsFieldP := Map(
-		func(t tuple.Of2[token.Token, tuple.Of2[token.Token, token.Token]]) string {
-			return t.V2.V2.Lexeme
+		func(t tuple.Of2[token.Token, tuple.Of2[token.Token, ArrowsLiteral]]) ArrowsLiteral {
+			return t.V2.V2
 		},
-		Sequence2WithInlineWS(identKeywordP("Arrows"), Sequence2WithInlineWS(colonTokenP(), identTokenP())),
+		Sequence2WithInlineWS(identKeywordP("arrows"), Sequence2WithInlineWS(colonTokenP(), arrowsLiteralP())),
 	)
-	// Objects ',' Arrows
+	// objects ',' arrows
 	fieldsP := Map(
-		func(t tuple.Of2[string, tuple.Of2[token.Token, string]]) tuple.Of2[string, string] {
-			return tuple.Of2[string, string]{V1: t.V1, V2: t.V2.V2}
+		func(t tuple.Of2[SetLiteral, tuple.Of2[token.Token, ArrowsLiteral]]) tuple.Of2[SetLiteral, ArrowsLiteral] {
+			return tuple.Of2[SetLiteral, ArrowsLiteral]{V1: t.V1, V2: t.V2.V2}
 		},
 		Sequence2WithWhiteSpace(objectsFieldP, Sequence2WithWhiteSpace(commaTokenP(), arrowsFieldP)),
 	)
 	// WS? fields WS?
 	innerP := Map(
-		func(t tuple.Of2[[]token.Token, tuple.Of2[tuple.Of2[string, string], []token.Token]]) tuple.Of2[string, string] {
+		func(t tuple.Of2[[]token.Token, tuple.Of2[tuple.Of2[SetLiteral, ArrowsLiteral], []token.Token]]) tuple.Of2[SetLiteral, ArrowsLiteral] {
 			return t.V2.V1
 		},
 		Sequence2(skipWS(), Sequence2(fieldsP, skipWS())),
 	)
-	// 'Graph' '{' inner '}'
+	// 'graph' '{' inner '}'
 	bodyP := Map(
-		func(t tuple.Of3[token.Token, tuple.Of2[string, string], token.Token]) GraphExpr {
-			return GraphExpr{ObjectsName: t.V2.V1, ArrowsName: t.V2.V2}
+		func(t tuple.Of3[token.Token, tuple.Of2[SetLiteral, ArrowsLiteral], token.Token]) GraphExpr {
+			return GraphExpr{Objects: t.V2.V1, Arrows: t.V2.V2}
 		},
 		Sequence3(lbraceTokenP(), innerP, rbraceTokenP()),
 	)
 	return Map(
 		func(t tuple.Of2[token.Token, GraphExpr]) GraphExpr { return t.V2 },
-		Sequence2(identKeywordP("Graph"), bodyP),
+		Sequence2(identKeywordP("graph"), bodyP),
 	)
 }
 
 // exprP parses any expression.
+// Order: graph (keyword 'graph') > single arrow (IDENT with ->) > arrows literal ({...}) > set literal ({...})
 func exprP() Parser[Expr] {
 	return Choice(
 		Map(func(g GraphExpr) Expr { return g }, graphExprP()),
-		// Brace literals: try most specific first (IDENT COLON > IDENT ARROW > IDENT only)
-		Map(func(l ArrowsCollectionLiteral) Expr { return l }, arrowsCollectionLiteralP()),
+		Map(func(a ArrowExpr) Expr { return a }, arrowExprP()),
 		Map(func(l ArrowsLiteral) Expr { return l }, arrowsLiteralP()),
 		Map(func(l SetLiteral) Expr { return l }, setLiteralP()),
 	)
 }
 
-// definitionP parses: IDENT WS? '=' WS? expr
+// definitionP parses: UPPER_IDENT WS? '=' WS? expr
 func definitionP() Parser[Definition] {
-	nameEqP := Sequence2WithInlineWS(identTokenP(), equalsTokenP())
+	nameEqP := Sequence2WithInlineWS(upperIdentTokenP(), equalsTokenP())
 	return Map(
 		func(t tuple.Of2[tuple.Of2[token.Token, token.Token], Expr]) Definition {
 			return Definition{Name: t.V1.V1.Lexeme, Expr: t.V2}

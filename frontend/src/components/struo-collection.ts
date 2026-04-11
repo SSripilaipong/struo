@@ -63,6 +63,7 @@ class StruoCollection extends HTMLElement {
 
 function itemHref(item: CollectionItem): string | null {
   switch (item.type) {
+    case 'arrow':  return `/_arrow/${encodeURIComponent(item.name)}`
     case 'arrows': return `/_arrows/${encodeURIComponent(item.name)}`
     case 'set':    return `/_set/${encodeURIComponent(item.name)}`
     case 'graph':  return `/_graph/${encodeURIComponent(item.name)}`

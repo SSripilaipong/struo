@@ -1,6 +1,7 @@
 import { escapeHtml } from '../utils.js'
 
 interface ArrowEntry {
+  label?: string
   from: string
   to: string
 }
@@ -8,7 +9,7 @@ interface ArrowEntry {
 interface GraphResponse {
   name: string
   objects: string[]
-  arrows: Record<string, ArrowEntry[]>
+  arrows: ArrowEntry[]
 }
 
 // Node appearance
@@ -95,7 +96,6 @@ class StruoGraph extends HTMLElement {
 
 function buildGraphSVG(data: GraphResponse): string {
   const objects = data.objects
-  const arrowSetNames = Object.keys(data.arrows)
 
   // Assign circular positions based on the canonical objects list.
   const n = objects.length
@@ -119,32 +119,44 @@ function buildGraphSVG(data: GraphResponse): string {
     })
   }
 
-  // For each (from, to) pair, track how many arrow-sets reference it and which index
-  // this set is — used to offset parallel edges with bezier curves.
-  const pairCounts = new Map<string, number>()
-  const pairIndex = new Map<string, number[]>()
+  // Group arrows by label. Unlabeled arrows get the sentinel key null.
+  const labelGroups = new Map<string | null, ArrowEntry[]>()
+  for (const e of data.arrows) {
+    const key = e.label ?? null
+    if (!labelGroups.has(key)) labelGroups.set(key, [])
+    labelGroups.get(key)!.push(e)
+  }
 
-  for (const [, entries] of Object.entries(data.arrows)) {
+  // Assign a color index to each label group. Unlabeled arrows get a default gray.
+  const labelList = [...labelGroups.keys()]
+  const UNLABELED_COLOR = '#94a3b8'
+
+  // For each (from, to) pair, track how many distinct label groups reference it
+  // (used to offset parallel edges with bezier curves).
+  const pairCounts = new Map<string, number>()
+  const pairIndex = new Map<string, number>()
+
+  for (const entries of labelGroups.values()) {
     for (const e of entries) {
       const key = `${e.from}→${e.to}`
       pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1)
     }
   }
 
-  // Build SVG markers (one per arrows-set for colored arrowheads)
-  const markers = arrowSetNames.map((setName, si) => {
-    const color = EDGE_COLORS[si % EDGE_COLORS.length]
-    const id = `arrow-${CSS.escape(setName)}`
+  // Build SVG markers (one per label group)
+  const markers = labelList.map((label, li) => {
+    const color = label === null ? UNLABELED_COLOR : EDGE_COLORS[li % EDGE_COLORS.length]
+    const id = label === null ? 'arrow-unlabeled' : `arrow-${CSS.escape(label)}`
     return `<marker id="${id}" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
       <polygon points="0 0, 8 3, 0 6" fill="${color}"/>
     </marker>`
   }).join('\n    ')
 
-  // Build edge groups per arrows-set
-  const edgeGroups = arrowSetNames.map((setName, si) => {
-    const color = EDGE_COLORS[si % EDGE_COLORS.length]
-    const markerId = `arrow-${CSS.escape(setName)}`
-    const entries = data.arrows[setName] ?? []
+  // Build edge groups per label
+  const edgeGroups = labelList.map((label, li) => {
+    const color = label === null ? UNLABELED_COLOR : EDGE_COLORS[li % EDGE_COLORS.length]
+    const markerId = label === null ? 'arrow-unlabeled' : `arrow-${CSS.escape(label)}`
+    const entries = labelGroups.get(label)!
 
     const edges = entries.map((e) => {
       const fromPos = pos.get(e.from)
@@ -153,18 +165,18 @@ function buildGraphSVG(data: GraphResponse): string {
 
       const key = `${e.from}→${e.to}`
       const total = pairCounts.get(key) ?? 1
-      const idx = pairIndex.get(key)?.length ?? 0
-      if (!pairIndex.has(key)) pairIndex.set(key, [])
-      pairIndex.get(key)!.push(si)
+      const idx = pairIndex.get(key) ?? 0
+      pairIndex.set(key, idx + 1)
 
       if (e.from === e.to) {
-        return selfLoopEdge(fromPos.x, fromPos.y, color, markerId, setName, si, total)
+        return selfLoopEdge(fromPos.x, fromPos.y, color, markerId, label, idx, total)
       }
 
-      return straightOrCurvedEdge(fromPos, toPos, color, markerId, setName, total, idx)
+      return straightOrCurvedEdge(fromPos, toPos, color, markerId, label, total, idx)
     }).join('\n    ')
 
-    return `<g class="arrows-set" data-name="${escapeHtml(setName)}">\n    ${edges}\n  </g>`
+    const groupLabel = label ?? ''
+    return `<g class="arrows-set" data-name="${escapeHtml(groupLabel)}">\n    ${edges}\n  </g>`
   }).join('\n  ')
 
   // Render nodes (on top of edges)
@@ -178,12 +190,13 @@ function buildGraphSVG(data: GraphResponse): string {
   </g>`
   }).join('\n  ')
 
-  // Legend
-  const legendItems = arrowSetNames.map((setName, si) => {
-    const color = EDGE_COLORS[si % EDGE_COLORS.length]
-    const lx = 20 + si * 80
+  // Legend (only labeled groups)
+  const namedLabels = labelList.filter((l): l is string => l !== null)
+  const legendItems = namedLabels.map((label, li) => {
+    const color = EDGE_COLORS[li % EDGE_COLORS.length]
+    const lx = 20 + li * 80
     return `<rect x="${lx}" y="${LEGEND_TOP}" width="16" height="16" rx="3" fill="${color}"/>
-    <text x="${lx + 22}" y="${LEGEND_TOP + 12}" font-size="13" fill="#475569">${escapeHtml(setName)}</text>`
+    <text x="${lx + 22}" y="${LEGEND_TOP + 12}" font-size="13" fill="#475569">${escapeHtml(label)}</text>`
   }).join('\n    ')
 
   return `<svg viewBox="${VIEWBOX}" xmlns="http://www.w3.org/2000/svg">
@@ -203,7 +216,7 @@ function straightOrCurvedEdge(
   to: { x: number; y: number },
   color: string,
   markerId: string,
-  setName: string,
+  label: string | null,
   total: number,
   idx: number,
 ): string {
@@ -223,11 +236,13 @@ function straightOrCurvedEdge(
   const midY = (sy + ey) / 2
 
   if (total <= 1) {
-    // Single edge: straight line with label
+    // Single edge: straight line with optional label
     const labelX = Math.round(midX - uy * 12)
     const labelY = Math.round(midY + ux * 12)
-    return `<line stroke="${color}" stroke-width="1.5" x1="${Math.round(sx)}" y1="${Math.round(sy)}" x2="${Math.round(ex)}" y2="${Math.round(ey)}" marker-end="url(#${markerId})"/>
-    <text x="${labelX}" y="${labelY}" text-anchor="middle" font-size="11" fill="${color}" font-weight="600">${escapeHtml(setName)}</text>`
+    const labelSvg = label
+      ? `\n    <text x="${labelX}" y="${labelY}" text-anchor="middle" font-size="11" fill="${color}" font-weight="600">${escapeHtml(label)}</text>`
+      : ''
+    return `<line stroke="${color}" stroke-width="1.5" x1="${Math.round(sx)}" y1="${Math.round(sy)}" x2="${Math.round(ex)}" y2="${Math.round(ey)}" marker-end="url(#${markerId})"/>${labelSvg}`
   }
 
   // Multiple edges: offset with quadratic bezier. Alternate above/below.
@@ -240,9 +255,11 @@ function straightOrCurvedEdge(
   const eyCurve = Math.round(to.y - uy * (NODE_R + 6))
   const labelX = Math.round(cpx - uy * 10)
   const labelY = Math.round(cpy + ux * 10)
+  const labelSvg = label
+    ? `\n    <text x="${labelX}" y="${labelY}" text-anchor="middle" font-size="11" fill="${color}" font-weight="600">${escapeHtml(label)}</text>`
+    : ''
 
-  return `<path stroke="${color}" stroke-width="1.5" fill="none" d="M ${Math.round(sx)} ${Math.round(sy)} Q ${cpx} ${cpy} ${exCurve} ${eyCurve}" marker-end="url(#${markerId})"/>
-    <text x="${labelX}" y="${labelY}" text-anchor="middle" font-size="11" fill="${color}" font-weight="600">${escapeHtml(setName)}</text>`
+  return `<path stroke="${color}" stroke-width="1.5" fill="none" d="M ${Math.round(sx)} ${Math.round(sy)} Q ${cpx} ${cpy} ${exCurve} ${eyCurve}" marker-end="url(#${markerId})"/>${labelSvg}`
 }
 
 function selfLoopEdge(
@@ -250,7 +267,7 @@ function selfLoopEdge(
   cy: number,
   color: string,
   markerId: string,
-  setName: string,
+  label: string | null,
   idx: number,
   _total: number,
 ): string {
@@ -265,8 +282,10 @@ function selfLoopEdge(
   const cpy = cy - NODE_R - 42
   const labelX = cpx
   const labelY = cpy - 8
-  return `<path stroke="${color}" stroke-width="1.5" fill="none" d="M ${x1} ${y1} C ${cpx - 24} ${cpy}, ${cpx + 24} ${cpy}, ${x2} ${y2}" marker-end="url(#${markerId})"/>
-    <text x="${labelX}" y="${labelY}" text-anchor="middle" font-size="11" fill="${color}" font-weight="600">${escapeHtml(setName)}</text>`
+  const labelSvg = label
+    ? `\n    <text x="${labelX}" y="${labelY}" text-anchor="middle" font-size="11" fill="${color}" font-weight="600">${escapeHtml(label)}</text>`
+    : ''
+  return `<path stroke="${color}" stroke-width="1.5" fill="none" d="M ${x1} ${y1} C ${cpx - 24} ${cpy}, ${cpx + 24} ${cpy}, ${x2} ${y2}" marker-end="url(#${markerId})"/>${labelSvg}`
 }
 
 customElements.define('struo-graph', StruoGraph)

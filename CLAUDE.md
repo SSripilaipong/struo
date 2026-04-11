@@ -37,7 +37,10 @@ struo/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── struo-collection.ts     <struo-collection> web component
-│   │   │   └── struo-mapping.ts        <struo-mapping> web component
+│   │   │   ├── struo-arrow.ts          <struo-arrow> web component
+│   │   │   ├── struo-arrows.ts         <struo-arrows> web component
+│   │   │   ├── struo-set.ts            <struo-set> web component
+│   │   │   └── struo-graph.ts          <struo-graph> web component
 │   │   ├── utils.ts                    shared helpers (escapeHtml)
 │   │   ├── main.ts                     entry point (imports components)
 │   │   └── style.css                   pastel design system
@@ -90,12 +93,21 @@ File extension: `.sto`
 ```
 # Comment to end of line
 
-# Simple mapping definition
-F = {a->b, b->c, a->c}
+# Variable names start with uppercase
+F = a->b                  # single arrow
+G = fog: a->c             # labeled arrow
+Fs = {f: a->b, g: b->c}  # set of (optionally labeled) arrows
+Xs = {a, b, c}            # set
+MyGraph = graph{objects: {a,b,c}, arrows: {f: a->b, g: b->c, c->d}}  # graph
 ```
 
-- **Identifiers**: `[a-zA-Z][a-zA-Z0-9_]*`
-- **Mapping literal**: `{ from->to, ... }` — comma-separated directed edges
+- **Variable names**: start with uppercase — `[A-Z][a-zA-Z0-9_]*`
+- **Keywords**: lowercase — `graph`, `objects`, `arrows`
+- **Node/label identifiers**: any identifier — `[a-zA-Z][a-zA-Z0-9_]*`
+- **Arrow**: `from->to` or `label: from->to`
+- **Arrows literal**: `{ arrow, ... }` — comma-separated arrows with optional per-arrow labels
+- **Set literal**: `{ ident, ... }` — comma-separated identifiers
+- **Graph**: `graph{objects: setLiteral, arrows: arrowsLiteral}` — inline
 - **Comments**: `#` to end of line
 
 ## HTTP routes
@@ -103,9 +115,15 @@ F = {a->b, b->c, a->c}
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/` | HTML shell with `<struo-collection>` |
-| GET | `/_mapping/{name}` | HTML shell with `<struo-mapping name="...">` |
+| GET | `/_arrow/{name}` | HTML shell with `<struo-arrow name="...">` |
+| GET | `/_arrows/{name}` | HTML shell with `<struo-arrows name="...">` |
+| GET | `/_set/{name}` | HTML shell with `<struo-set name="...">` |
+| GET | `/_graph/{name}` | HTML shell with `<struo-graph name="...">` |
 | GET | `/api/collection` | JSON list of all definitions |
-| GET | `/api/mapping/{name}` | JSON entries for a named mapping |
+| GET | `/api/arrow/{name}` | JSON for a named arrow |
+| GET | `/api/arrows/{name}` | JSON entries for a named arrows set |
+| GET | `/api/set/{name}` | JSON elements for a named set |
+| GET | `/api/graph/{name}` | JSON objects+arrows for a named graph |
 | GET | `/assets/*` | Static frontend assets (embedded) |
 
 ## Parser combinators

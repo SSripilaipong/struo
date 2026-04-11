@@ -26,6 +26,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, htmlShell, `<struo-collection></struo-collection>`)
 }
 
+func (s *Server) handleArrowPage(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, htmlShell, fmt.Sprintf(`<struo-arrow name="%s"></struo-arrow>`, name))
+}
+
 func (s *Server) handleArrowsPage(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -57,12 +63,12 @@ type collectionResponse struct {
 
 func valueTypeName(v interpreter.Value) string {
 	switch v.(type) {
+	case interpreter.ArrowVal:
+		return "arrow"
 	case interpreter.ArrowsVal:
 		return "arrows"
 	case interpreter.SetVal:
 		return "set"
-	case interpreter.ArrowsCollectionVal:
-		return "arrows-collection"
 	case interpreter.GraphVal:
 		return "graph"
 	default:
@@ -79,8 +85,31 @@ func (s *Server) handleAPICollection(w http.ResponseWriter, r *http.Request) {
 }
 
 type arrowEntryJSON struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	Label *string `json:"label,omitempty"`
+	From  string  `json:"from"`
+	To    string  `json:"to"`
+}
+
+type arrowResponse struct {
+	Name  string  `json:"name"`
+	Label *string `json:"label,omitempty"`
+	From  string  `json:"from"`
+	To    string  `json:"to"`
+}
+
+func (s *Server) handleAPIArrow(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	val, ok := s.collection.Bindings[name]
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	av, ok := val.(interpreter.ArrowVal)
+	if !ok {
+		http.Error(w, "not an arrow", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, arrowResponse{Name: name, Label: av.Label, From: av.From, To: av.To})
 }
 
 type arrowsResponse struct {
@@ -102,7 +131,7 @@ func (s *Server) handleAPIArrows(w http.ResponseWriter, r *http.Request) {
 	}
 	entries := make([]arrowEntryJSON, len(av.Entries))
 	for i, e := range av.Entries {
-		entries[i] = arrowEntryJSON{From: e.From, To: e.To}
+		entries[i] = arrowEntryJSON{Label: e.Label, From: e.From, To: e.To}
 	}
 	writeJSON(w, arrowsResponse{Name: name, Entries: entries})
 }
@@ -128,9 +157,9 @@ func (s *Server) handleAPISet(w http.ResponseWriter, r *http.Request) {
 }
 
 type graphResponse struct {
-	Name    string                       `json:"name"`
-	Objects []string                     `json:"objects"`
-	Arrows  map[string][]arrowEntryJSON  `json:"arrows"`
+	Name    string           `json:"name"`
+	Objects []string         `json:"objects"`
+	Arrows  []arrowEntryJSON `json:"arrows"`
 }
 
 func (s *Server) handleAPIGraph(w http.ResponseWriter, r *http.Request) {
@@ -145,15 +174,11 @@ func (s *Server) handleAPIGraph(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not a graph", http.StatusNotFound)
 		return
 	}
-	arrowsMap := make(map[string][]arrowEntryJSON, len(gv.Arrows))
-	for _, ace := range gv.Arrows {
-		entries := make([]arrowEntryJSON, len(ace.Arrows.Entries))
-		for i, e := range ace.Arrows.Entries {
-			entries[i] = arrowEntryJSON{From: e.From, To: e.To}
-		}
-		arrowsMap[ace.Name] = entries
+	arrows := make([]arrowEntryJSON, len(gv.Arrows))
+	for i, e := range gv.Arrows {
+		arrows[i] = arrowEntryJSON{Label: e.Label, From: e.From, To: e.To}
 	}
-	writeJSON(w, graphResponse{Name: name, Objects: gv.Objects, Arrows: arrowsMap})
+	writeJSON(w, graphResponse{Name: name, Objects: gv.Objects, Arrows: arrows})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

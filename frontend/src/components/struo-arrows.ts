@@ -1,6 +1,7 @@
 import { escapeHtml } from '../utils.js'
 
 interface ArrowEntry {
+  label?: string
   from: string
   to: string
 }
@@ -111,7 +112,7 @@ function buildGraph(entries: ArrowEntry[]): string {
     const to = pos.get(e.to)!
 
     if (e.from === e.to) {
-      return selfLoop(from.x, from.y)
+      return selfLoop(from.x, from.y, e.label)
     }
 
     const dx = to.x - from.x
@@ -125,7 +126,15 @@ function buildGraph(entries: ArrowEntry[]): string {
     const ex = Math.round(to.x - ux * (NODE_R + 6))
     const ey = Math.round(to.y - uy * (NODE_R + 6))
 
-    return `<line class="graph-edge" x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" marker-end="url(#arrow)"/>`
+    const midX = (sx + ex) / 2
+    const midY = (sy + ey) / 2
+    const labelX = Math.round(midX - uy * 12)
+    const labelY = Math.round(midY + ux * 12)
+    const labelSvg = e.label
+      ? `\n  <text x="${labelX}" y="${labelY}" text-anchor="middle" font-size="11" fill="#8b5cf6" font-weight="600">${escapeHtml(e.label)}</text>`
+      : ''
+
+    return `<line class="graph-edge" x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" marker-end="url(#arrow)"/>${labelSvg}`
   }).join('\n  ')
 
   // Render nodes.
@@ -150,7 +159,7 @@ function buildGraph(entries: ArrowEntry[]): string {
 </svg>`
 }
 
-function selfLoop(cx: number, cy: number): string {
+function selfLoop(cx: number, cy: number, label?: string): string {
   const r = 22
   const x1 = cx - r / 2
   const y1 = cy - NODE_R + 4
@@ -158,7 +167,10 @@ function selfLoop(cx: number, cy: number): string {
   const y2 = cy - NODE_R + 4
   const cpx = cx
   const cpy = cy - NODE_R - 42
-  return `<path class="graph-edge" d="M ${x1} ${y1} C ${cpx - 24} ${cpy}, ${cpx + 24} ${cpy}, ${x2} ${y2}" marker-end="url(#arrow)"/>`
+  const labelSvg = label
+    ? `\n  <text x="${cpx}" y="${cpy - 8}" text-anchor="middle" font-size="11" fill="#8b5cf6" font-weight="600">${escapeHtml(label)}</text>`
+    : ''
+  return `<path class="graph-edge" d="M ${x1} ${y1} C ${cpx - 24} ${cpy}, ${cpx + 24} ${cpy}, ${x2} ${y2}" marker-end="url(#arrow)"/>${labelSvg}`
 }
 
 customElements.define('struo-arrows', StruoArrows)

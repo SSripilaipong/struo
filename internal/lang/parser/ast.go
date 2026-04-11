@@ -14,15 +14,18 @@ type Definition struct {
 // Expr is the expression interface (sealed via unexported method).
 type Expr interface{ exprNode() }
 
-// ArrowsLiteral is a set of directed edges: { a->b, b->c }
-type ArrowsLiteral struct {
-	Entries []ArrowEntry
+// ArrowExpr is a single directed edge with an optional label: (p:) a->b
+type ArrowExpr struct {
+	Label *string // nil if no label
+	From  string
+	To    string
 }
 
-// ArrowEntry is a single directed edge: from -> to
-type ArrowEntry struct {
-	From string
-	To   string
+func (ArrowExpr) exprNode() {}
+
+// ArrowsLiteral is a set of directed edges: { a->b, b->c } or { f: a->b, g: b->c }
+type ArrowsLiteral struct {
+	Entries []ArrowExpr
 }
 
 func (ArrowsLiteral) exprNode() {}
@@ -34,24 +37,10 @@ type SetLiteral struct {
 
 func (SetLiteral) exprNode() {}
 
-// ArrowsCollectionEntry is a named arrows literal inside an ArrowsCollectionLiteral.
-type ArrowsCollectionEntry struct {
-	Name   string
-	Arrows ArrowsLiteral
-}
-
-// ArrowsCollectionLiteral is a named collection of arrows sets: { F: {a->b}, G: {a->c} }
-type ArrowsCollectionLiteral struct {
-	Entries []ArrowsCollectionEntry
-}
-
-func (ArrowsCollectionLiteral) exprNode() {}
-
-// GraphExpr references previously defined Set and ArrowsCollection by name.
-// Forward references are not supported — both names must be defined earlier.
+// GraphExpr is an inline graph: graph{objects: {a,b,c}, arrows: {f: a->b, ...}}
 type GraphExpr struct {
-	ObjectsName string
-	ArrowsName  string
+	Objects SetLiteral
+	Arrows  ArrowsLiteral
 }
 
 func (GraphExpr) exprNode() {}

@@ -3,6 +3,7 @@ package server
 import (
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"struo/internal/lang/interpreter"
 )
@@ -23,10 +24,12 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", s.handleIndex)
+	mux.HandleFunc("GET /_arrow/{name}", s.handleArrowPage)
 	mux.HandleFunc("GET /_arrows/{name}", s.handleArrowsPage)
 	mux.HandleFunc("GET /_set/{name}", s.handleSetPage)
 	mux.HandleFunc("GET /_graph/{name}", s.handleGraphPage)
 	mux.HandleFunc("GET /api/collection", s.handleAPICollection)
+	mux.HandleFunc("GET /api/arrow/{name}", s.handleAPIArrow)
 	mux.HandleFunc("GET /api/arrows/{name}", s.handleAPIArrows)
 	mux.HandleFunc("GET /api/set/{name}", s.handleAPISet)
 	mux.HandleFunc("GET /api/graph/{name}", s.handleAPIGraph)
@@ -37,6 +40,10 @@ func (s *Server) Handler() http.Handler {
 
 // Run starts the HTTP server on addr.
 func (s *Server) Run(addr string) error {
-	log.Printf("struo listening on http://%s", addr)
+	host, port, _ := net.SplitHostPort(addr)
+	if host == "" {
+		host = "localhost"
+	}
+	log.Printf("struo listening on http://%s:%s", host, port)
 	return http.ListenAndServe(addr, s.Handler())
 }
