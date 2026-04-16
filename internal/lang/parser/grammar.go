@@ -7,13 +7,6 @@ import (
 	"struo/internal/lang/token"
 )
 
-// ptrToOptional converts the *string returned by Optional() into optional.Of[string].
-func ptrToOptional(p *string) optional.Of[string] {
-	if p == nil {
-		return optional.None[string]()
-	}
-	return optional.Some(*p)
-}
 
 // Parse tokenizes a struo program and returns the AST or an error.
 // It errors if tokens remain unconsumed after the program.
@@ -93,7 +86,7 @@ func arrowExprP() Parser[ArrowExpr] {
 	// core: (label:)? from->to
 	coreP := Map(
 		func(t tuple.Of2[*string, tuple.Of2[token.Token, tuple.Of2[token.Token, token.Token]]]) ArrowExpr {
-			return ArrowExpr{Label: ptrToOptional(t.V1), From: t.V2.V1.Lexeme, To: t.V2.V2.V2.Lexeme}
+			return ArrowExpr{Label: optional.FromPtr(t.V1), From: t.V2.V1.Lexeme, To: t.V2.V2.V2.Lexeme}
 		},
 		Sequence2WithInlineWS(Optional(labelP), fromToP),
 	)
@@ -105,7 +98,7 @@ func arrowExprP() Parser[ArrowExpr] {
 	return Map(
 		func(t tuple.Of2[ArrowExpr, *string]) ArrowExpr {
 			arrow := t.V1
-			arrow.Body = ptrToOptional(t.V2)
+			arrow.Body = optional.FromPtr(t.V2)
 			return arrow
 		},
 		Sequence2WithInlineWS(coreP, Optional(bodyP)),

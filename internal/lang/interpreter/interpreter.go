@@ -152,11 +152,15 @@ func evalExpr(expr parser.Expr, c *Collection) (Value, error) {
 				return nil, fmt.Errorf("arrow body ref %q is not an arrows collection", body)
 			}
 			// Optionally validate: each inner arrow's From must be in the source graph.
-			var sourceGraph *GraphVal
+			// Collect source graph's object names for fast membership check.
+			var sourceObjNames map[string]bool
 			for i := range objects {
 				if objects[i].Name == ae.From {
 					if sub, ok := objects[i].SubGraph.Unwrap(); ok {
-						sourceGraph = &sub
+						sourceObjNames = make(map[string]bool, len(sub.Objects))
+						for _, o := range sub.Objects {
+							sourceObjNames[o.Name] = true
+						}
 					}
 					break
 				}
@@ -164,17 +168,8 @@ func evalExpr(expr parser.Expr, c *Collection) (Value, error) {
 			// Expand inner arrows with compound labels.
 			outerLabel, hasOuter := ae.Label.Unwrap()
 			for _, inner := range bodyArrows.Entries {
-				if sourceGraph != nil {
-					valid := false
-					for _, o := range sourceGraph.Objects {
-						if o.Name == inner.From {
-							valid = true
-							break
-						}
-					}
-					if !valid {
-						return nil, fmt.Errorf("arrow body %q: endpoint %q is not in source graph %q", body, inner.From, ae.From)
-					}
+				if sourceObjNames != nil && !sourceObjNames[inner.From] {
+					return nil, fmt.Errorf("arrow body %q: endpoint %q is not in source graph %q", body, inner.From, ae.From)
 				}
 				innerLabel, hasInner := inner.Label.Unwrap()
 				var compLabel optional.Of[string]

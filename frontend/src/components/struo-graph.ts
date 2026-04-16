@@ -59,20 +59,75 @@ const ORBIT_R = 155
 const LEGEND_TOP = 520
 const VIEWBOX = '0 0 500 600'
 
-// Expanded-mode constants (when graph-objects contain sub-graphs)
-const EX_CX = 350
-const EX_CY = 320
-const EX_OUTER_ORBIT_R = 200
-const EX_BUBBLE_R = 75
-const EX_INNER_NODE_R = 16
-const EX_INNER_ORBIT_R = 38
-const EX_LEGEND_TOP = 650
-const EX_VIEWBOX = '0 0 700 720'
+// Layout parameters for interactive mode (graph-objects as expandable bubbles).
+const EXPANDED = {
+  CX: 350, CY: 320,
+  OUTER_ORBIT_R: 200,
+  BUBBLE_R: 75,
+  INNER_NODE_R: 16,
+  INNER_ORBIT_R: 38,
+  LEGEND_TOP: 650,
+  VIEWBOX: '0 0 700 720',
+} as const
+
+type Pos = { x: number; y: number }
+type Resolver = (name: string) => Pos | undefined
+
+// placeOnOrbit distributes n items evenly on a circle and populates a Map with their positions.
+// Single items are placed at the centre.
+function placeOnOrbit(
+  names: string[], cx: number, cy: number, orbitR: number,
+  into: Map<string, Pos>,
+): void {
+  const n = names.length
+  if (n === 1) {
+    into.set(names[0], { x: cx, y: cy })
+  } else {
+    names.forEach((name, i) => {
+      const angle = (2 * Math.PI * i / n) - Math.PI / 2
+      into.set(name, {
+        x: Math.round(cx + orbitR * Math.cos(angle)),
+        y: Math.round(cy + orbitR * Math.sin(angle)),
+      })
+    })
+  }
+}
+
+// buildInnerToParent maps each inner node name to the top-level graph-object that contains it.
+function buildInnerToParent(data: GraphResponse): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const obj of data.objects) {
+    if (obj.subGraph) {
+      for (const inner of obj.subGraph.objects) {
+        map.set(inner.name, obj.name)
+      }
+    }
+  }
+  return map
+}
+
+// resolveEndpoint returns the pixel position for an arrow endpoint.
+// Inner nodes of expanded objects use their inner position; collapsed → bubble centre; top-level → bubble centre.
+function resolveEndpoint(
+  name: string,
+  innerToParent: Map<string, string>,
+  bubblePos: Map<string, Pos>,
+  innerPos: Map<string, Pos>,
+  expandedNodes: Set<string>,
+): Pos | undefined {
+  const parent = innerToParent.get(name)
+  if (parent === undefined) return bubblePos.get(name)
+  if (expandedNodes.has(parent)) return innerPos.get(name)
+  return bubblePos.get(parent)
+}
 
 class StruoGraph extends HTMLElement {
   static get observedAttributes(): string[] {
     return ['name']
   }
+
+  private cachedData: GraphResponse | null = null
+  private expandedNodes = new Set<string>()
 
   connectedCallback(): void {
     this.render()
@@ -81,40 +136,55 @@ class StruoGraph extends HTMLElement {
   private async render(): Promise<void> {
     const name = this.getAttribute('name') ?? ''
 
-    let data: GraphResponse
-
-    try {
-      const res = await fetch(`/api/graph/${encodeURIComponent(name)}`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      data = await res.json()
-    } catch {
+    if (!this.cachedData) {
+      try {
+        const res = await fetch(`/api/graph/${encodeURIComponent(name)}`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        this.cachedData = await res.json()
+      } catch {
+        this.innerHTML = `
+          <div class="mapping-page">
+            <nav class="mapping-nav">
+              <a class="back-link" href="/">← collection</a>
+            </nav>
+            <div class="error-state">Graph "${escapeHtml(name)}" not found.</div>
+          </div>
+        `
+        return
+      }
       this.innerHTML = `
         <div class="mapping-page">
           <nav class="mapping-nav">
             <a class="back-link" href="/">← collection</a>
+            <h1 class="mapping-title">${escapeHtml(this.cachedData!.name)}</h1>
+            <span class="mapping-type-badge">graph</span>
           </nav>
-          <div class="error-state">Graph "${escapeHtml(name)}" not found.</div>
+          <div class="graph-container"></div>
         </div>
       `
-      return
     }
 
-    const svg = buildGraphSVG(data)
+    this._renderSVG()
+  }
 
-    this.innerHTML = `
-      <div class="mapping-page">
-        <nav class="mapping-nav">
-          <a class="back-link" href="/">← collection</a>
-          <h1 class="mapping-title">${escapeHtml(data.name)}</h1>
-          <span class="mapping-type-badge">graph</span>
-        </nav>
-        <div class="graph-container">${svg}</div>
-      </div>
-    `
+  private _renderSVG(): void {
+    const svg = buildGraphSVG(this.cachedData!, this.expandedNodes)
+    this.querySelector('.graph-container')!.innerHTML = svg
+    this._attachHandlers()
+  }
+
+  private _attachHandlers(): void {
+    this.querySelectorAll<HTMLElement>('[data-toggle-node]').forEach(el => {
+      el.addEventListener('click', () => {
+        const name = el.dataset.toggleNode!
+        this.expandedNodes.has(name) ? this.expandedNodes.delete(name) : this.expandedNodes.add(name)
+        this._renderSVG()
+      })
+    })
   }
 }
 
-function buildGraphSVG(data: GraphResponse): string {
+function buildGraphSVG(data: GraphResponse, expandedNodes: Set<string>): string {
   const objects = data.objects
   const n = objects.length
 
@@ -126,30 +196,19 @@ function buildGraphSVG(data: GraphResponse): string {
 
   const hasSubGraphs = objects.some(o => o.subGraph != null)
   return hasSubGraphs
-    ? buildExpandedSVG(data)
+    ? buildInteractiveSVG(data, expandedNodes)
     : buildFlatSVG(data)
 }
 
 // buildFlatSVG renders graphs whose objects are all plain nodes (no sub-graphs).
 function buildFlatSVG(data: GraphResponse): string {
   const objects = data.objects
-  const n = objects.length
-  const pos = new Map<string, { x: number; y: number }>()
+  const pos = new Map<string, Pos>()
+  placeOnOrbit(objects.map(o => o.name), CX, CY, ORBIT_R, pos)
 
-  if (n === 1) {
-    pos.set(objects[0].name, { x: CX, y: CY })
-  } else {
-    objects.forEach((obj, i) => {
-      const angle = (2 * Math.PI * i / n) - Math.PI / 2
-      pos.set(obj.name, {
-        x: Math.round(CX + ORBIT_R * Math.cos(angle)),
-        y: Math.round(CY + ORBIT_R * Math.sin(angle)),
-      })
-    })
-  }
-
+  const resolve: Resolver = (name) => pos.get(name)
   const { markers, edgeGroups, legendItems } = buildEdgesAndLegend(
-    data.arrows, pos, LEGEND_TOP, NODE_R,
+    data.arrows, resolve, '', LEGEND_TOP, NODE_R,
   )
 
   const nodeSvg = objects.map((obj, i) => {
@@ -174,121 +233,141 @@ function buildFlatSVG(data: GraphResponse): string {
 </svg>`
 }
 
-// buildExpandedSVG renders graphs that have graph-objects (sub-graphs as bubbles).
-function buildExpandedSVG(data: GraphResponse): string {
+// buildInteractiveSVG renders graphs that have graph-objects (sub-graphs as expandable bubbles).
+// Nodes with subGraphs are collapsed by default and expand on click.
+// Arrows auto-deduplicate or expand based on which nodes are expanded.
+function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>): string {
   const objects = data.objects
-  const n = objects.length
+  const EX = EXPANDED
 
-  // Position bubble centres on the outer orbit.
-  const bubblePos = new Map<string, { x: number; y: number }>()
-  if (n === 1) {
-    bubblePos.set(objects[0].name, { x: EX_CX, y: EX_CY })
-  } else {
-    objects.forEach((obj, i) => {
-      const angle = (2 * Math.PI * i / n) - Math.PI / 2
-      bubblePos.set(obj.name, {
-        x: Math.round(EX_CX + EX_OUTER_ORBIT_R * Math.cos(angle)),
-        y: Math.round(EX_CY + EX_OUTER_ORBIT_R * Math.sin(angle)),
-      })
-    })
-  }
+  // 1. Position bubble centres for all top-level objects.
+  const bubblePos = new Map<string, Pos>()
+  placeOnOrbit(objects.map(o => o.name), EX.CX, EX.CY, EX.OUTER_ORBIT_R, bubblePos)
 
-  // Position inner nodes within each bubble on a small orbit.
-  const innerPos = new Map<string, { x: number; y: number }>()
-  objects.forEach((obj) => {
-    if (!obj.subGraph) return
+  // 2. Position inner nodes for expanded objects.
+  const innerPos = new Map<string, Pos>()
+  objects.forEach(obj => {
+    if (!obj.subGraph || !expandedNodes.has(obj.name)) return
     const bc = bubblePos.get(obj.name)!
-    const innerObjs = obj.subGraph.objects
-    const m = innerObjs.length
-    if (m === 1) {
-      innerPos.set(innerObjs[0].name, { x: bc.x, y: bc.y })
-    } else {
-      innerObjs.forEach((innerObj, j) => {
-        const angle = (2 * Math.PI * j / m) - Math.PI / 2
-        innerPos.set(innerObj.name, {
-          x: Math.round(bc.x + EX_INNER_ORBIT_R * Math.cos(angle)),
-          y: Math.round(bc.y + EX_INNER_ORBIT_R * Math.sin(angle)),
-        })
-      })
-    }
+    placeOnOrbit(obj.subGraph.objects.map(o => o.name), bc.x, bc.y, EX.INNER_ORBIT_R, innerPos)
   })
 
-  // Combined position resolver: inner nodes first, then bubble centres.
-  const resolvePos = (name: string) => innerPos.get(name) ?? bubblePos.get(name)
+  // 3. Map inner node → parent object.
+  const innerToParent = buildInnerToParent(data)
+  const resolver: Resolver = (name) =>
+    resolveEndpoint(name, innerToParent, bubblePos, innerPos, expandedNodes)
 
-  // Render bubble outlines (drawn first, as the background layer).
-  const bubbleSvg = objects.map((obj, i) => {
+  // 4. Compute display arrows with deduplication.
+  // Compound arrows (label contains '::') where both endpoints are collapsed
+  // are collapsed into a single outer arrow (e.g. 'f::u' + 'f::v' → 'f: g→h').
+  const dedupMap = new Map<string, ArrowEntry>()
+  for (const arrow of data.arrows) {
+    const sepIdx = arrow.label?.indexOf('::') ?? -1
+    if (sepIdx >= 0 && arrow.label) {
+      const outerLabel = arrow.label.slice(0, sepIdx)
+      const fromParent = innerToParent.get(arrow.from)
+      const toParent = innerToParent.get(arrow.to)
+      const fromCollapsed = fromParent !== undefined && !expandedNodes.has(fromParent)
+      const toCollapsed = toParent !== undefined && !expandedNodes.has(toParent)
+      if (fromCollapsed && toCollapsed) {
+        // Both sides collapsed → synthetic single outer arrow (deduplicated by key).
+        const key = `${outerLabel}|${fromParent}|${toParent}`
+        if (!dedupMap.has(key)) {
+          dedupMap.set(key, { label: outerLabel, from: fromParent!, to: toParent! })
+        }
+      } else {
+        // At least one side expanded → show individual compound arrow.
+        dedupMap.set(`${arrow.label}|${arrow.from}|${arrow.to}`, arrow)
+      }
+    } else {
+      // Non-compound arrow: always shown as-is.
+      dedupMap.set(`${arrow.label ?? ''}|${arrow.from}|${arrow.to}`, arrow)
+    }
+  }
+  const displayArrows = [...dedupMap.values()]
+
+  // 5. Build inner arrows for each expanded node (scoped markers).
+  const innerEdgeResults = objects.map((obj, i) => {
+    if (!obj.subGraph || !expandedNodes.has(obj.name)) return { markers: '', edgeGroups: '', legendItems: '' }
+    const innerResolver: Resolver = (name) => innerPos.get(name)
+    return buildEdgesAndLegend(obj.subGraph.arrows, innerResolver, `i${i}`, EX.LEGEND_TOP, EX.INNER_NODE_R)
+  })
+
+  // 6. Build outer/cross-boundary arrows.
+  const outerEdgeResult = buildEdgesAndLegend(displayArrows, resolver, 'o', EX.LEGEND_TOP, EX.INNER_NODE_R)
+
+  const allMarkers = [...innerEdgeResults.map(r => r.markers), outerEdgeResult.markers]
+    .filter(Boolean).join('\n    ')
+  const innerArrowsSvg = innerEdgeResults.map(r => r.edgeGroups).join('\n  ')
+
+  // 7. Render object circles/bubbles.
+  const objectsSvg = objects.map((obj, i) => {
     const bc = bubblePos.get(obj.name)!
     const fill = NODE_FILLS[i % NODE_FILLS.length]
     const stroke = NODE_STROKES[i % NODE_STROKES.length]
+
     if (!obj.subGraph) {
       return `<g class="graph-node">
     <circle cx="${bc.x}" cy="${bc.y}" r="${NODE_R}" fill="${fill}" stroke="${stroke}" stroke-width="2"/>
     <text class="graph-node-label" x="${bc.x}" y="${bc.y}" text-anchor="middle" dominant-baseline="central">${escapeHtml(obj.name)}</text>
   </g>`
     }
-    const labelY = bc.y - EX_BUBBLE_R - 8
-    return `<g class="graph-bubble">
-    <circle cx="${bc.x}" cy="${bc.y}" r="${EX_BUBBLE_R}" fill="${fill}" fill-opacity="0.25" stroke="${stroke}" stroke-width="2" stroke-dasharray="6 3"/>
+
+    if (!expandedNodes.has(obj.name)) {
+      // Collapsed expandable node: subtle outer dashed ring hints at expandability.
+      return `<g class="graph-node" data-toggle-node="${escapeHtml(obj.name)}" style="cursor:pointer">
+    <circle cx="${bc.x}" cy="${bc.y}" r="${NODE_R + 9}" fill="none" stroke="${stroke}" stroke-width="1" stroke-dasharray="3 2" opacity="0.5"/>
+    <circle cx="${bc.x}" cy="${bc.y}" r="${NODE_R}" fill="${fill}" stroke="${stroke}" stroke-width="2"/>
+    <text class="graph-node-label" x="${bc.x}" y="${bc.y}" text-anchor="middle" dominant-baseline="central">${escapeHtml(obj.name)}</text>
+  </g>`
+    }
+
+    // Expanded bubble.
+    const labelY = bc.y - EX.BUBBLE_R - 8
+    return `<g class="graph-bubble" data-toggle-node="${escapeHtml(obj.name)}" style="cursor:pointer">
+    <circle cx="${bc.x}" cy="${bc.y}" r="${EX.BUBBLE_R}" fill="${fill}" fill-opacity="0.25" stroke="${stroke}" stroke-width="2" stroke-dasharray="6 3"/>
     <text class="graph-node-label" x="${bc.x}" y="${labelY}" text-anchor="middle" font-size="13" fill="#475569" font-weight="600">${escapeHtml(obj.name)}</text>
   </g>`
   }).join('\n  ')
 
-  // Render arrows internal to each sub-graph.
-  const innerArrowsSvg = objects.flatMap((obj) => {
-    if (!obj.subGraph) return []
-    const { edgeGroups } = buildEdgesAndLegend(
-      obj.subGraph.arrows, innerPos, EX_LEGEND_TOP, EX_INNER_NODE_R,
-    )
-    return [edgeGroups]
-  }).join('\n  ')
-
-  // Render cross-boundary (outer) arrows using resolved positions.
-  const { markers, edgeGroups: outerEdgeGroups, legendItems } = buildEdgesAndLegend(
-    data.arrows, resolvePos, EX_LEGEND_TOP, EX_INNER_NODE_R,
-  )
-
-  // Render inner nodes (drawn on top of arrows, inside bubbles).
+  // 8. Render inner nodes for expanded objects (drawn above arrows).
   const innerNodeSvg = objects.flatMap((obj, i) => {
-    if (!obj.subGraph) return []
+    if (!obj.subGraph || !expandedNodes.has(obj.name)) return []
     return obj.subGraph.objects.map((innerObj, j) => {
       const p = innerPos.get(innerObj.name)
       if (!p) return ''
       const fill = NODE_FILLS[(i + j + 2) % NODE_FILLS.length]
       const stroke = NODE_STROKES[(i + j + 2) % NODE_STROKES.length]
       return `<g class="graph-node">
-    <circle cx="${p.x}" cy="${p.y}" r="${EX_INNER_NODE_R}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>
+    <circle cx="${p.x}" cy="${p.y}" r="${EX.INNER_NODE_R}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>
     <text class="graph-node-label" x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-size="11">${escapeHtml(innerObj.name)}</text>
   </g>`
     })
   }).join('\n  ')
 
-  return `<svg viewBox="${EX_VIEWBOX}" xmlns="http://www.w3.org/2000/svg">
+  return `<svg viewBox="${EX.VIEWBOX}" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    ${markers}
+    ${allMarkers}
   </defs>
-  ${bubbleSvg}
+  ${objectsSvg}
   ${innerArrowsSvg}
-  ${outerEdgeGroups}
   ${innerNodeSvg}
+  ${outerEdgeResult.edgeGroups}
   <g class="graph-legend">
-    ${legendItems}
+    ${outerEdgeResult.legendItems}
   </g>
 </svg>`
 }
 
 // buildEdgesAndLegend groups arrows by label, builds SVG markers, edge paths, and legend.
-// posMap can be either a Map or a resolver function.
+// markerScope prefixes marker IDs to avoid collisions when multiple calls share one SVG.
 function buildEdgesAndLegend(
   arrows: ArrowEntry[],
-  posMap: Map<string, { x: number; y: number }> | ((name: string) => { x: number; y: number } | undefined),
+  resolve: Resolver,
+  markerScope: string,
   legendTop: number,
   nodeR: number,
 ): { markers: string; edgeGroups: string; legendItems: string } {
-  const resolve = typeof posMap === 'function'
-    ? posMap
-    : (name: string) => (posMap as Map<string, { x: number; y: number }>).get(name)
-
   const labelGroups = new Map<string | null, ArrowEntry[]>()
   for (const e of arrows) {
     const key = e.label ?? null
@@ -308,9 +387,10 @@ function buildEdgesAndLegend(
     }
   }
 
+  const scopePrefix = markerScope ? `${markerScope}-` : ''
   const markers = labelList.map((label, li) => {
     const color = label === null ? UNLABELED_COLOR : EDGE_COLORS[li % EDGE_COLORS.length]
-    const id = label === null ? 'arrow-unlabeled' : `arrow-${CSS.escape(label)}`
+    const id = `${scopePrefix}a${li}`
     return `<marker id="${id}" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
       <polygon points="0 0, 8 3, 0 6" fill="${color}"/>
     </marker>`
@@ -318,7 +398,7 @@ function buildEdgesAndLegend(
 
   const edgeGroups = labelList.map((label, li) => {
     const color = label === null ? UNLABELED_COLOR : EDGE_COLORS[li % EDGE_COLORS.length]
-    const markerId = label === null ? 'arrow-unlabeled' : `arrow-${CSS.escape(label)}`
+    const markerId = `${scopePrefix}a${li}`
     const entries = labelGroups.get(label)!
 
     const edges = entries.map((e) => {

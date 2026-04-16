@@ -8,14 +8,6 @@ import (
 	"struo/internal/lang/interpreter"
 )
 
-// optLabel converts optional.Of[string] to *string for JSON omitempty serialization.
-func optLabel(o optional.Of[string]) *string {
-	if s, ok := o.Unwrap(); ok {
-		return &s
-	}
-	return nil
-}
-
 // htmlShell is the HTML page wrapper. The server injects the appropriate
 // web component into %s depending on the route.
 const htmlShell = `<!DOCTYPE html>
@@ -118,7 +110,7 @@ func (s *Server) handleAPIArrow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not an arrow", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, arrowResponse{Name: name, Label: optLabel(av.Label), From: av.From, To: av.To})
+	writeJSON(w, arrowResponse{Name: name, Label: optional.ToPtr(av.Label), From: av.From, To: av.To})
 }
 
 type arrowsResponse struct {
@@ -140,7 +132,7 @@ func (s *Server) handleAPIArrows(w http.ResponseWriter, r *http.Request) {
 	}
 	entries := make([]arrowEntryJSON, len(av.Entries))
 	for i, e := range av.Entries {
-		entries[i] = arrowEntryJSON{Label: optLabel(e.Label), From: e.From, To: e.To}
+		entries[i] = arrowEntryJSON{Label: optional.ToPtr(e.Label), From: e.From, To: e.To}
 	}
 	writeJSON(w, arrowsResponse{Name: name, Entries: entries})
 }
@@ -193,7 +185,7 @@ func graphValToJSON(gv interpreter.GraphVal) graphBodyJSON {
 	}
 	arrows := make([]arrowEntryJSON, len(gv.Arrows))
 	for i, e := range gv.Arrows {
-		arrows[i] = arrowEntryJSON{Label: optLabel(e.Label), From: e.From, To: e.To}
+		arrows[i] = arrowEntryJSON{Label: optional.ToPtr(e.Label), From: e.From, To: e.To}
 	}
 	return graphBodyJSON{Objects: objects, Arrows: arrows}
 }
