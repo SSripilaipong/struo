@@ -1,9 +1,6 @@
 # Go binary
 /struo
 
-# User-local collection file (use index.sto.example as a starting point)
-index.sto
-
 # Frontend
 frontend/node_modules/
 internal/assets/dist/

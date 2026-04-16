@@ -1,5 +1,7 @@
 package parser
 
+import "struo/internal/common/optional"
+
 // Program is the top-level AST node.
 type Program struct {
 	Defs []Definition
@@ -38,8 +40,10 @@ type SetLiteral struct {
 func (SetLiteral) exprNode() {}
 
 // GraphExpr is an inline graph: graph{objects: {a,b,c}, arrows: {f: a->b, ...}}
+// Objects is None when the shorthand form graph{arrows: {...}} is used;
+// the interpreter will auto-derive objects from arrow endpoints in that case.
 type GraphExpr struct {
-	Objects SetLiteral
+	Objects optional.Of[SetLiteral]
 	Arrows  ArrowsLiteral
 }
 

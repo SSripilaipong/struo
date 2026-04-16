@@ -2,9 +2,9 @@ package parser
 
 import (
 	"fmt"
-	"struo/internal/lang/result"
+	"struo/internal/common/result"
+	"struo/internal/common/tuple"
 	"struo/internal/lang/token"
-	"struo/internal/lang/tuple"
 )
 
 type Parser[R any] = func([]token.Token) result.Result[tuple.Of2[R, []token.Token]]

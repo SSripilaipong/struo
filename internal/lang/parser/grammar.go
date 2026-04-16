@@ -2,8 +2,9 @@ package parser
 
 import (
 	"fmt"
+	"struo/internal/common/optional"
+	"struo/internal/common/tuple"
 	"struo/internal/lang/token"
-	"struo/internal/lang/tuple"
 )
 
 // Parse tokenizes a struo program and returns the AST or an error.
@@ -154,7 +155,10 @@ func setLiteralP() Parser[SetLiteral] {
 	)
 }
 
-// graphExprP parses: 'graph' '{' WS? 'objects' ':' WS? setLiteral WS? ',' WS? 'arrows' ':' WS? arrowsLiteral WS? '}'
+// graphExprP parses:
+//
+//	Full form:     'graph' '{' WS? 'objects' ':' WS? setLiteral WS? ',' WS? 'arrows' ':' WS? arrowsLiteral WS? '}'
+//	Shorthand:     'graph' '{' WS? 'arrows' ':' WS? arrowsLiteral WS? '}'
 func graphExprP() Parser[GraphExpr] {
 	// objects: <setLiteral>
 	objectsFieldP := Map(
@@ -170,25 +174,30 @@ func graphExprP() Parser[GraphExpr] {
 		},
 		Sequence2WithInlineWS(identKeywordP("arrows"), Sequence2WithInlineWS(colonTokenP(), arrowsLiteralP())),
 	)
-	// objects ',' arrows
-	fieldsP := Map(
-		func(t tuple.Of2[SetLiteral, tuple.Of2[token.Token, ArrowsLiteral]]) tuple.Of2[SetLiteral, ArrowsLiteral] {
-			return tuple.Of2[SetLiteral, ArrowsLiteral]{V1: t.V1, V2: t.V2.V2}
+	// Full form: objects ',' arrows
+	fullFieldsP := Map(
+		func(t tuple.Of2[SetLiteral, tuple.Of2[token.Token, ArrowsLiteral]]) GraphExpr {
+			return GraphExpr{Objects: optional.Some(t.V1), Arrows: t.V2.V2}
 		},
 		Sequence2WithWhiteSpace(objectsFieldP, Sequence2WithWhiteSpace(commaTokenP(), arrowsFieldP)),
 	)
-	// WS? fields WS?
+	// Shorthand form: arrows only
+	shorthandFieldsP := Map(
+		func(arrows ArrowsLiteral) GraphExpr {
+			return GraphExpr{Objects: optional.None[SetLiteral](), Arrows: arrows}
+		},
+		arrowsFieldP,
+	)
+	// WS? (fullFields | shorthandFields) WS?
 	innerP := Map(
-		func(t tuple.Of2[[]token.Token, tuple.Of2[tuple.Of2[SetLiteral, ArrowsLiteral], []token.Token]]) tuple.Of2[SetLiteral, ArrowsLiteral] {
+		func(t tuple.Of2[[]token.Token, tuple.Of2[GraphExpr, []token.Token]]) GraphExpr {
 			return t.V2.V1
 		},
-		Sequence2(skipWS(), Sequence2(fieldsP, skipWS())),
+		Sequence2(skipWS(), Sequence2(Choice(fullFieldsP, shorthandFieldsP), skipWS())),
 	)
 	// 'graph' '{' inner '}'
 	bodyP := Map(
-		func(t tuple.Of3[token.Token, tuple.Of2[SetLiteral, ArrowsLiteral], token.Token]) GraphExpr {
-			return GraphExpr{Objects: t.V2.V1, Arrows: t.V2.V2}
-		},
+		func(t tuple.Of3[token.Token, GraphExpr, token.Token]) GraphExpr { return t.V2 },
 		Sequence3(lbraceTokenP(), innerP, rbraceTokenP()),
 	)
 	return Map(

@@ -17,11 +17,13 @@ A graph manipulation program. Users define graphs as mappings in `.sto` files; s
 
 ```
 struo/
-├── cmd/struo/main.go                   entry point
+├── main.go                             entry point
 ├── internal/
-│   ├── lang/
+│   ├── common/
 │   │   ├── result/result.go            Result[T] monad
 │   │   ├── tuple/tuple.go              Of2/Of3 product types
+│   │   └── optional/optional.go        Of[T] optional type
+│   ├── lang/
 │   │   ├── token/token.go              token types
 │   │   ├── tokenizer/tokenizer.go      lexer
 │   │   ├── parser/
@@ -60,7 +62,7 @@ struo/
 cd frontend && npm install && npm run build && cd ..
 
 # 2. Build Go binary (embeds internal/assets/dist/)
-go build ./cmd/struo/
+go build .
 ```
 
 ## Run
@@ -98,7 +100,8 @@ F = a->b                  # single arrow
 G = fog: a->c             # labeled arrow
 Fs = {f: a->b, g: b->c}  # set of (optionally labeled) arrows
 Xs = {a, b, c}            # set
-MyGraph = graph{objects: {a,b,c}, arrows: {f: a->b, g: b->c, c->d}}  # graph
+MyGraph = graph{objects: {a,b,c}, arrows: {f: a->b, g: b->c, c->d}}  # graph (explicit objects)
+Short  = graph{arrows: {a->b, b->c}}                                  # graph (objects auto-derived)
 ```
 
 - **Variable names**: start with uppercase — `[A-Z][a-zA-Z0-9_]*`
@@ -107,7 +110,7 @@ MyGraph = graph{objects: {a,b,c}, arrows: {f: a->b, g: b->c, c->d}}  # graph
 - **Arrow**: `from->to` or `label: from->to`
 - **Arrows literal**: `{ arrow, ... }` — comma-separated arrows with optional per-arrow labels
 - **Set literal**: `{ ident, ... }` — comma-separated identifiers
-- **Graph**: `graph{objects: setLiteral, arrows: arrowsLiteral}` — inline
+- **Graph**: `graph{objects: setLiteral, arrows: arrowsLiteral}` — full form; or `graph{arrows: arrowsLiteral}` — shorthand, objects auto-derived from arrow endpoints in order of first appearance
 - **Comments**: `#` to end of line
 
 ## HTTP routes
@@ -126,10 +129,19 @@ MyGraph = graph{objects: {a,b,c}, arrows: {f: a->b, g: b->c, c->d}}  # graph
 | GET | `/api/graph/{name}` | JSON objects+arrows for a named graph |
 | GET | `/assets/*` | Static frontend assets (embedded) |
 
+## Common packages
+
+`internal/common/` holds domain-agnostic generic utilities used across the project:
+- `result.Result[T]` — `Ok`/`Err` monad; `IsOk()`, `Unwrap() (T, error)`
+- `tuple.Of2[A,B]` / `Of3[A,B,C]` — product types with `T2`/`T3` constructors and `T3Drop2`
+- `optional.Of[T]` — `Some`/`None`; `IsPresent()`, `Unwrap() (T, bool)`
+
+When touching files that still import `internal/lang/result` or `internal/lang/tuple` (those paths no longer exist — they were moved to `internal/common/`), update the import paths accordingly.
+
 ## Parser combinators
 
 The parser follows the same pattern as `~/projects/modulang/internal`:
-- `Parser[R]` interface + `ParserFunc[R]` struct
+- `Parser[R]` — type alias for `func([]token.Token) result.Result[tuple.Of2[R, []token.Token]]`
 - Combinators: `Satisfy`, `Map`, `Sequence2/3`, `Choice`, `Optional`, `RepeatAnyTimes/OneOrMore`
 - Whitespace helpers: `skipWS()`, `skipInlineWS()`, `Sequence2WithWhiteSpace/InlineWS`
 

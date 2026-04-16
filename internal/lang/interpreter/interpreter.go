@@ -98,8 +98,21 @@ func evalExpr(expr parser.Expr, _ *Collection) (Value, error) {
 		return SetVal{Elements: elems}, nil
 
 	case parser.GraphExpr:
-		objects := make([]string, len(e.Objects.Elements))
-		copy(objects, e.Objects.Elements)
+		var objects []string
+		if obj, ok := e.Objects.Unwrap(); ok {
+			objects = make([]string, len(obj.Elements))
+			copy(objects, obj.Elements)
+		} else {
+			seen := map[string]bool{}
+			for _, ae := range e.Arrows.Entries {
+				for _, node := range []string{ae.From, ae.To} {
+					if !seen[node] {
+						seen[node] = true
+						objects = append(objects, node)
+					}
+				}
+			}
+		}
 		arrows := make([]ArrowEntry, len(e.Arrows.Entries))
 		for i, ae := range e.Arrows.Entries {
 			arrows[i] = ArrowEntry{Label: ae.Label, From: ae.From, To: ae.To}
