@@ -3,6 +3,7 @@ package interpreter
 import (
 	"fmt"
 	"iter"
+	"struo/internal/common/optional"
 	"struo/internal/lang/parser"
 )
 
@@ -11,14 +12,14 @@ type Value interface{ valueTag() }
 
 // ArrowEntry is a single directed edge with an optional label.
 type ArrowEntry struct {
-	Label *string
+	Label optional.Of[string]
 	From  string
 	To    string
 }
 
 // ArrowVal holds a single evaluated arrow.
 type ArrowVal struct {
-	Label *string
+	Label optional.Of[string]
 	From  string
 	To    string
 }
@@ -39,9 +40,16 @@ type SetVal struct {
 
 func (SetVal) valueTag() {}
 
+// GraphObjectEntry represents one entry in a graph's objects list.
+// SubGraph is Some when the object is a reference to another graph variable.
+type GraphObjectEntry struct {
+	Name     string
+	SubGraph optional.Of[GraphVal]
+}
+
 // GraphVal holds a graph with a set of objects and a list of arrows.
 type GraphVal struct {
-	Objects []string
+	Objects []GraphObjectEntry
 	Arrows  []ArrowEntry
 }
 
@@ -80,7 +88,7 @@ func Interpret(prog parser.Program) (*Collection, error) {
 	return c, nil
 }
 
-func evalExpr(expr parser.Expr, _ *Collection) (Value, error) {
+func evalExpr(expr parser.Expr, c *Collection) (Value, error) {
 	switch e := expr.(type) {
 	case parser.ArrowExpr:
 		return ArrowVal{Label: e.Label, From: e.From, To: e.To}, nil
@@ -98,24 +106,90 @@ func evalExpr(expr parser.Expr, _ *Collection) (Value, error) {
 		return SetVal{Elements: elems}, nil
 
 	case parser.GraphExpr:
-		var objects []string
-		if obj, ok := e.Objects.Unwrap(); ok {
-			objects = make([]string, len(obj.Elements))
-			copy(objects, obj.Elements)
+		var objects []GraphObjectEntry
+		if objsLit, ok := e.Objects.Unwrap(); ok {
+			for _, entry := range objsLit.Entries {
+				if ref, ok := entry.Ref.Unwrap(); ok {
+					refVal, exists := c.Bindings[ref]
+					if !exists {
+						return nil, fmt.Errorf("object ref %q not found", ref)
+					}
+					subGraph, ok := refVal.(GraphVal)
+					if !ok {
+						return nil, fmt.Errorf("object ref %q is not a graph", ref)
+					}
+					objects = append(objects, GraphObjectEntry{Name: entry.Name, SubGraph: optional.Some(subGraph)})
+				} else {
+					objects = append(objects, GraphObjectEntry{Name: entry.Name, SubGraph: optional.None[GraphVal]()})
+				}
+			}
 		} else {
 			seen := map[string]bool{}
 			for _, ae := range e.Arrows.Entries {
 				for _, node := range []string{ae.From, ae.To} {
 					if !seen[node] {
 						seen[node] = true
-						objects = append(objects, node)
+						objects = append(objects, GraphObjectEntry{Name: node, SubGraph: optional.None[GraphVal]()})
 					}
 				}
 			}
 		}
-		arrows := make([]ArrowEntry, len(e.Arrows.Entries))
-		for i, ae := range e.Arrows.Entries {
-			arrows[i] = ArrowEntry{Label: ae.Label, From: ae.From, To: ae.To}
+
+		var arrows []ArrowEntry
+		for _, ae := range e.Arrows.Entries {
+			body, hasBody := ae.Body.Unwrap()
+			if !hasBody {
+				arrows = append(arrows, ArrowEntry{Label: ae.Label, From: ae.From, To: ae.To})
+				continue
+			}
+			// Look up the body arrows-collection variable.
+			bodyVal, exists := c.Bindings[body]
+			if !exists {
+				return nil, fmt.Errorf("arrow body ref %q not found", body)
+			}
+			bodyArrows, ok := bodyVal.(ArrowsVal)
+			if !ok {
+				return nil, fmt.Errorf("arrow body ref %q is not an arrows collection", body)
+			}
+			// Optionally validate: each inner arrow's From must be in the source graph.
+			var sourceGraph *GraphVal
+			for i := range objects {
+				if objects[i].Name == ae.From {
+					if sub, ok := objects[i].SubGraph.Unwrap(); ok {
+						sourceGraph = &sub
+					}
+					break
+				}
+			}
+			// Expand inner arrows with compound labels.
+			outerLabel, hasOuter := ae.Label.Unwrap()
+			for _, inner := range bodyArrows.Entries {
+				if sourceGraph != nil {
+					valid := false
+					for _, o := range sourceGraph.Objects {
+						if o.Name == inner.From {
+							valid = true
+							break
+						}
+					}
+					if !valid {
+						return nil, fmt.Errorf("arrow body %q: endpoint %q is not in source graph %q", body, inner.From, ae.From)
+					}
+				}
+				innerLabel, hasInner := inner.Label.Unwrap()
+				var compLabel optional.Of[string]
+				switch {
+				case hasOuter && hasInner:
+					compLabel = optional.Some(outerLabel + "::" + innerLabel)
+				case hasOuter:
+					compLabel = optional.Some(outerLabel)
+				case hasInner:
+					compLabel = optional.Some(innerLabel)
+				default:
+					compLabel = optional.None[string]()
+				}
+				arrows = append(arrows, ArrowEntry{Label: compLabel, From: inner.From, To: inner.To})
+			}
 		}
 		return GraphVal{Objects: objects, Arrows: arrows}, nil
 

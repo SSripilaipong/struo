@@ -7,6 +7,14 @@ import (
 	"struo/internal/lang/token"
 )
 
+// ptrToOptional converts the *string returned by Optional() into optional.Of[string].
+func ptrToOptional(p *string) optional.Of[string] {
+	if p == nil {
+		return optional.None[string]()
+	}
+	return optional.Some(*p)
+}
+
 // Parse tokenizes a struo program and returns the AST or an error.
 // It errors if tokens remain unconsumed after the program.
 func Parse(tokens []token.Token) (Program, error) {
@@ -68,8 +76,9 @@ func colonTokenP() Parser[token.Token] {
 
 // --- grammar rules ---
 
-// arrowExprP parses: (IDENT ':' WS?)? IDENT WS? '->' WS? IDENT
+// arrowExprP parses: (IDENT ':' WS?)? IDENT WS? '->' WS? IDENT (WS? ':' WS? UPPERCASE_IDENT)?
 // Optional label uses backtracking via Optional combinator.
+// Optional body ': VarName' after the arrow endpoints.
 func arrowExprP() Parser[ArrowExpr] {
 	// label part: IDENT ':'  (Optional will backtrack if ':' is not found)
 	labelP := Map(
@@ -81,11 +90,25 @@ func arrowExprP() Parser[ArrowExpr] {
 		identTokenP(),
 		Sequence2WithInlineWS(arrowTokenP(), identTokenP()),
 	)
-	return Map(
+	// core: (label:)? from->to
+	coreP := Map(
 		func(t tuple.Of2[*string, tuple.Of2[token.Token, tuple.Of2[token.Token, token.Token]]]) ArrowExpr {
-			return ArrowExpr{Label: t.V1, From: t.V2.V1.Lexeme, To: t.V2.V2.V2.Lexeme}
+			return ArrowExpr{Label: ptrToOptional(t.V1), From: t.V2.V1.Lexeme, To: t.V2.V2.V2.Lexeme}
 		},
 		Sequence2WithInlineWS(Optional(labelP), fromToP),
+	)
+	// body: ':' UPPERCASE_IDENT
+	bodyP := Map(
+		func(t tuple.Of2[token.Token, token.Token]) string { return t.V2.Lexeme },
+		Sequence2WithInlineWS(colonTokenP(), upperIdentTokenP()),
+	)
+	return Map(
+		func(t tuple.Of2[ArrowExpr, *string]) ArrowExpr {
+			arrow := t.V1
+			arrow.Body = ptrToOptional(t.V2)
+			return arrow
+		},
+		Sequence2WithInlineWS(coreP, Optional(bodyP)),
 	)
 }
 
@@ -155,17 +178,68 @@ func setLiteralP() Parser[SetLiteral] {
 	)
 }
 
+// objectEntryP parses a single objects-section entry:
+//   labeled ref:  IDENT ':' UPPERCASE_IDENT  →  ObjectEntry{Name, Some(ref)}
+//   plain object: IDENT                      →  ObjectEntry{Name, None}
+func objectEntryP() Parser[ObjectEntry] {
+	labeledRefP := Map(
+		func(t tuple.Of2[token.Token, tuple.Of2[token.Token, token.Token]]) ObjectEntry {
+			ref := t.V2.V2.Lexeme
+			return ObjectEntry{Name: t.V1.Lexeme, Ref: optional.Some(ref)}
+		},
+		Sequence2WithInlineWS(identTokenP(), Sequence2WithInlineWS(colonTokenP(), upperIdentTokenP())),
+	)
+	plainIdentP := Map(
+		func(t token.Token) ObjectEntry { return ObjectEntry{Name: t.Lexeme, Ref: optional.None[string]()} },
+		identTokenP(),
+	)
+	return Choice(labeledRefP, plainIdentP)
+}
+
+// objectEntriesP parses: objectEntry (',' WS? objectEntry)*
+func objectEntriesP() Parser[[]ObjectEntry] {
+	tailP := Map(
+		func(t tuple.Of2[token.Token, ObjectEntry]) ObjectEntry { return t.V2 },
+		Sequence2WithInlineWS(commaTokenP(), objectEntryP()),
+	)
+	return Map(
+		func(t tuple.Of2[ObjectEntry, []ObjectEntry]) []ObjectEntry {
+			return append([]ObjectEntry{t.V1}, t.V2...)
+		},
+		Sequence2(objectEntryP(), RepeatAnyTimes(tailP)),
+	)
+}
+
+// objectsLiteralP parses: '{' WS? objectEntries? WS? '}'
+func objectsLiteralP() Parser[ObjectsLiteral] {
+	innerP := Map(
+		func(t tuple.Of2[[]token.Token, tuple.Of2[*[]ObjectEntry, []token.Token]]) []ObjectEntry {
+			if t.V2.V1 == nil {
+				return nil
+			}
+			return *t.V2.V1
+		},
+		Sequence2(skipInlineWS(), Sequence2(Optional(objectEntriesP()), skipInlineWS())),
+	)
+	return Map(
+		func(t tuple.Of3[token.Token, []ObjectEntry, token.Token]) ObjectsLiteral {
+			return ObjectsLiteral{Entries: t.V2}
+		},
+		Sequence3(lbraceTokenP(), innerP, rbraceTokenP()),
+	)
+}
+
 // graphExprP parses:
 //
-//	Full form:     'graph' '{' WS? 'objects' ':' WS? setLiteral WS? ',' WS? 'arrows' ':' WS? arrowsLiteral WS? '}'
+//	Full form:     'graph' '{' WS? 'objects' ':' WS? objectsLiteral WS? ',' WS? 'arrows' ':' WS? arrowsLiteral WS? '}'
 //	Shorthand:     'graph' '{' WS? 'arrows' ':' WS? arrowsLiteral WS? '}'
 func graphExprP() Parser[GraphExpr] {
-	// objects: <setLiteral>
+	// objects: <objectsLiteral>
 	objectsFieldP := Map(
-		func(t tuple.Of2[token.Token, tuple.Of2[token.Token, SetLiteral]]) SetLiteral {
+		func(t tuple.Of2[token.Token, tuple.Of2[token.Token, ObjectsLiteral]]) ObjectsLiteral {
 			return t.V2.V2
 		},
-		Sequence2WithInlineWS(identKeywordP("objects"), Sequence2WithInlineWS(colonTokenP(), setLiteralP())),
+		Sequence2WithInlineWS(identKeywordP("objects"), Sequence2WithInlineWS(colonTokenP(), objectsLiteralP())),
 	)
 	// arrows: <arrowsLiteral>
 	arrowsFieldP := Map(
@@ -176,7 +250,7 @@ func graphExprP() Parser[GraphExpr] {
 	)
 	// Full form: objects ',' arrows
 	fullFieldsP := Map(
-		func(t tuple.Of2[SetLiteral, tuple.Of2[token.Token, ArrowsLiteral]]) GraphExpr {
+		func(t tuple.Of2[ObjectsLiteral, tuple.Of2[token.Token, ArrowsLiteral]]) GraphExpr {
 			return GraphExpr{Objects: optional.Some(t.V1), Arrows: t.V2.V2}
 		},
 		Sequence2WithWhiteSpace(objectsFieldP, Sequence2WithWhiteSpace(commaTokenP(), arrowsFieldP)),
@@ -184,7 +258,7 @@ func graphExprP() Parser[GraphExpr] {
 	// Shorthand form: arrows only
 	shorthandFieldsP := Map(
 		func(arrows ArrowsLiteral) GraphExpr {
-			return GraphExpr{Objects: optional.None[SetLiteral](), Arrows: arrows}
+			return GraphExpr{Objects: optional.None[ObjectsLiteral](), Arrows: arrows}
 		},
 		arrowsFieldP,
 	)

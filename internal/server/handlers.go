@@ -4,8 +4,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"struo/internal/common/optional"
 	"struo/internal/lang/interpreter"
 )
+
+// optLabel converts optional.Of[string] to *string for JSON omitempty serialization.
+func optLabel(o optional.Of[string]) *string {
+	if s, ok := o.Unwrap(); ok {
+		return &s
+	}
+	return nil
+}
 
 // htmlShell is the HTML page wrapper. The server injects the appropriate
 // web component into %s depending on the route.
@@ -109,7 +118,7 @@ func (s *Server) handleAPIArrow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not an arrow", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, arrowResponse{Name: name, Label: av.Label, From: av.From, To: av.To})
+	writeJSON(w, arrowResponse{Name: name, Label: optLabel(av.Label), From: av.From, To: av.To})
 }
 
 type arrowsResponse struct {
@@ -131,7 +140,7 @@ func (s *Server) handleAPIArrows(w http.ResponseWriter, r *http.Request) {
 	}
 	entries := make([]arrowEntryJSON, len(av.Entries))
 	for i, e := range av.Entries {
-		entries[i] = arrowEntryJSON{Label: e.Label, From: e.From, To: e.To}
+		entries[i] = arrowEntryJSON{Label: optLabel(e.Label), From: e.From, To: e.To}
 	}
 	writeJSON(w, arrowsResponse{Name: name, Entries: entries})
 }
@@ -156,10 +165,37 @@ func (s *Server) handleAPISet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, setResponse{Name: name, Elements: sv.Elements})
 }
 
+type graphObjectJSON struct {
+	Name     string         `json:"name"`
+	SubGraph *graphBodyJSON `json:"subGraph,omitempty"`
+}
+
+type graphBodyJSON struct {
+	Objects []graphObjectJSON `json:"objects"`
+	Arrows  []arrowEntryJSON  `json:"arrows"`
+}
+
 type graphResponse struct {
-	Name    string           `json:"name"`
-	Objects []string         `json:"objects"`
-	Arrows  []arrowEntryJSON `json:"arrows"`
+	Name    string            `json:"name"`
+	Objects []graphObjectJSON `json:"objects"`
+	Arrows  []arrowEntryJSON  `json:"arrows"`
+}
+
+func graphValToJSON(gv interpreter.GraphVal) graphBodyJSON {
+	objects := make([]graphObjectJSON, len(gv.Objects))
+	for i, o := range gv.Objects {
+		if sub, ok := o.SubGraph.Unwrap(); ok {
+			body := graphValToJSON(sub)
+			objects[i] = graphObjectJSON{Name: o.Name, SubGraph: &body}
+		} else {
+			objects[i] = graphObjectJSON{Name: o.Name}
+		}
+	}
+	arrows := make([]arrowEntryJSON, len(gv.Arrows))
+	for i, e := range gv.Arrows {
+		arrows[i] = arrowEntryJSON{Label: optLabel(e.Label), From: e.From, To: e.To}
+	}
+	return graphBodyJSON{Objects: objects, Arrows: arrows}
 }
 
 func (s *Server) handleAPIGraph(w http.ResponseWriter, r *http.Request) {
@@ -174,11 +210,8 @@ func (s *Server) handleAPIGraph(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not a graph", http.StatusNotFound)
 		return
 	}
-	arrows := make([]arrowEntryJSON, len(gv.Arrows))
-	for i, e := range gv.Arrows {
-		arrows[i] = arrowEntryJSON{Label: e.Label, From: e.From, To: e.To}
-	}
-	writeJSON(w, graphResponse{Name: name, Objects: gv.Objects, Arrows: arrows})
+	body := graphValToJSON(gv)
+	writeJSON(w, graphResponse{Name: name, Objects: body.Objects, Arrows: body.Arrows})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
