@@ -33,7 +33,7 @@ html, body {
 /* ── Collection page ────────────────────────────────── */
 
 .collection {
-  max-width: 480px;
+  max-width: 860px;
   margin: 0 auto;
   padding: 3rem 1.5rem;
 }
@@ -112,7 +112,8 @@ html, body {
 /* ── Mapping / graph page ───────────────────────────── */
 
 .mapping-page {
-  max-width: 640px;
+  max-width: 1200px;
+  width: 100%;
   margin: 0 auto;
   padding: 2.5rem 1.5rem;
 }
@@ -162,12 +163,13 @@ html, body {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   overflow: hidden;
+  height: clamp(300px, calc(100vh - 11rem), 850px);
 }
 
 .graph-container svg {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
 }
 
 .graph-node-label {

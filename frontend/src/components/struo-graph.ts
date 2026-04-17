@@ -96,9 +96,12 @@ function centerPositions(pos: Map<string, Pos>, cx: number, cy: number): Map<str
   return out
 }
 
+
 // computeViewBox derives a tight SVG viewBox from the bounding box of node centres + margin.
 // minBottom optionally extends the bottom edge (e.g. to include a legend row below the nodes).
-function computeViewBox(pos: Map<string, Pos>, nodeR: number, padding: number, minBottom = -Infinity): { viewBox: string; minX: number; minY: number } {
+// targetRatio, when provided, pads the viewBox symmetrically to match that aspect ratio so the
+// SVG content fills the container without letterboxing.
+function computeViewBox(pos: Map<string, Pos>, nodeR: number, padding: number, minBottom = -Infinity, targetRatio?: number): { viewBox: string; minX: number; minY: number } {
   if (pos.size === 0) return { viewBox: '0 0 300 200', minX: 0, minY: 0 }
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
   for (const { x, y } of pos.values()) {
@@ -106,9 +109,20 @@ function computeViewBox(pos: Map<string, Pos>, nodeR: number, padding: number, m
     if (y < minY) minY = y; if (y > maxY) maxY = y
   }
   const margin = nodeR + padding
-  const vx = Math.floor(minX - margin), vy = Math.floor(minY - margin)
-  const vw = Math.ceil(maxX + margin) - vx
-  const vh = Math.ceil(Math.max(maxY + margin, minBottom)) - vy
+  let vx = Math.floor(minX - margin), vy = Math.floor(minY - margin)
+  let vw = Math.ceil(maxX + margin) - vx
+  let vh = Math.ceil(Math.max(maxY + margin, minBottom)) - vy
+  if (targetRatio !== undefined && targetRatio > 0) {
+    if (vw / vh < targetRatio) {
+      const newVw = Math.ceil(vh * targetRatio)
+      vx -= Math.floor((newVw - vw) / 2)
+      vw = newVw
+    } else {
+      const newVh = Math.ceil(vw / targetRatio)
+      vy -= Math.floor((newVh - vh) / 2)
+      vh = newVh
+    }
+  }
   return { viewBox: `${vx} ${vy} ${vw} ${vh}`, minX, minY }
 }
 
@@ -215,10 +229,24 @@ class StruoGraph extends HTMLElement {
     this._renderSVG()
   }
 
-  private _renderSVG(): void {
-    const svg = buildGraphSVG(this.cachedData!, this.expandedNodes, this.prevBubblePos)
-    this.querySelector('.graph-container')!.innerHTML = svg
+  private _renderSVG(isFinalise = false): void {
+    const container = this.querySelector<HTMLElement>('.graph-container')
+    if (!container) return
+    const { clientWidth: w, clientHeight: h } = container
+    if (w === 0 || h === 0) {
+      requestAnimationFrame(() => this._renderSVG())
+      return
+    }
+    container.innerHTML = buildGraphSVG(this.cachedData!, this.expandedNodes, this.prevBubblePos, w / h)
     this._attachHandlers()
+    // After inserting the SVG the flex container may settle to a different height.
+    // One follow-up frame corrects the viewBox without re-running indefinitely.
+    if (!isFinalise) {
+      requestAnimationFrame(() => {
+        const w2 = container.clientWidth, h2 = container.clientHeight
+        if (Math.abs(w2 / h2 - w / h) > 0.02) this._renderSVG(true)
+      })
+    }
   }
 
   private _attachHandlers(): void {
@@ -232,7 +260,7 @@ class StruoGraph extends HTMLElement {
   }
 }
 
-function buildGraphSVG(data: GraphResponse, expandedNodes: Set<string>, prevBubblePos: Map<string, Pos>): string {
+function buildGraphSVG(data: GraphResponse, expandedNodes: Set<string>, prevBubblePos: Map<string, Pos>, containerRatio: number): string {
   const objects = data.objects
   const n = objects.length
 
@@ -244,12 +272,12 @@ function buildGraphSVG(data: GraphResponse, expandedNodes: Set<string>, prevBubb
 
   const hasSubGraphs = objects.some(o => o.subGraph != null)
   return hasSubGraphs
-    ? buildInteractiveSVG(data, expandedNodes, prevBubblePos)
-    : buildFlatSVG(data)
+    ? buildInteractiveSVG(data, expandedNodes, prevBubblePos, containerRatio)
+    : buildFlatSVG(data, containerRatio)
 }
 
 // buildFlatSVG renders graphs whose objects are all plain nodes (no sub-graphs).
-function buildFlatSVG(data: GraphResponse): string {
+function buildFlatSVG(data: GraphResponse, containerRatio: number): string {
   const objects = data.objects
   const seed = randomSeed(objects.map(o => o.name), NODE_R + 4, NODE_R + 4, 500 - NODE_R - 4, 480 - NODE_R - 4)
   const pos = roundPositions(
@@ -267,7 +295,7 @@ function buildFlatSVG(data: GraphResponse): string {
   const hasLegend = data.arrows.some(a => a.label)
   const legendBottom = hasLegend ? legendTop + 16 + 12 : -Infinity
 
-  const { viewBox, minX } = computeViewBox(pos, NODE_R, 12, legendBottom)
+  const { viewBox, minX } = computeViewBox(pos, NODE_R, 12, legendBottom, containerRatio)
 
   const resolve: Resolver = (name) => pos.get(name)
   const { markers, edgeGroups, legendItems } = buildEdgesAndLegend(
@@ -302,7 +330,7 @@ function buildFlatSVG(data: GraphResponse): string {
 // Layout uses a single joint force simulation: non-expanded nodes are ungrouped,
 // inner nodes of each expanded object form a group. Group CoMs repel each other and
 // ungrouped nodes; cohesion springs keep group members together.
-function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, prevBubblePos: Map<string, Pos>): string {
+function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, prevBubblePos: Map<string, Pos>, containerRatio: number): string {
   const objects = data.objects
   const EX = EXPANDED
 
@@ -486,7 +514,7 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
   const hasLegend = displayArrows.some(a => a.label)
   const legendBottom = hasLegend ? legendTop + 16 + 12 : -Infinity
 
-  const { viewBox, minX } = computeViewBox(boundaryPos, 0, 20, legendBottom)
+  const { viewBox, minX } = computeViewBox(boundaryPos, 0, 20, legendBottom, containerRatio)
 
   // Persist bubble positions so the next render can use them as stable seeds.
   for (const [name, pos] of bubblePos) prevBubblePos.set(name, pos)
