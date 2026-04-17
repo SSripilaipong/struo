@@ -1,6 +1,6 @@
 import { escapeHtml } from '../utils.js'
 import {
-  forceDirectedGraph, roundPositions, alignHorizontal, interGroupNodeRepel, groupGravity, interGroupEdgeSpring, intraGroupEdgeSpring,
+  forceDirectedGraph, roundPositions, alignHorizontal, interGroupNodeRepel, groupGravity, interGroupEdgeSpring, intraGroupEdgeSpring, globalGravity,
   type Pos,
 } from './force-simulation.js'
 
@@ -285,7 +285,7 @@ function buildFlatSVG(data: GraphResponse, containerRatio: number): string {
       nodes: objects.map(o => o.name), edges: data.arrows, initialPos: seed,
       bounds: { xMin: NODE_R + 4, yMin: NODE_R + 4, xMax: 500 - NODE_R - 4, yMax: 480 - NODE_R - 4 },
       nodeR: NODE_R,
-      forces: [interGroupNodeRepel(1, 1), intraGroupEdgeSpring(0.15)],
+      forces: [interGroupNodeRepel(1, 1), intraGroupEdgeSpring(0.15), globalGravity(0.05)],
     }))
   )
 
@@ -460,6 +460,7 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
         groupGravity(0.5),
         interGroupEdgeSpring(),
         intraGroupEdgeSpring(0.15),
+        globalGravity(0.05),
       ],
     }))
   )

@@ -270,6 +270,26 @@ export function intraGroupEdgeSpring(pinnedStrength: number): Force {
   }
 }
 
+/**
+ * Pulls every node toward the global center of mass of all nodes.
+ * Keeps disconnected components from scattering away from each other.
+ * Linear attraction so strength is scale-independent.
+ */
+export function globalGravity(strength: number): Force {
+  return {
+    apply(state: SimulationState): void {
+      const { n, px, py, ddx, ddy } = state
+      let cx = 0, cy = 0
+      for (let i = 0; i < n; i++) { cx += px[i]; cy += py[i] }
+      cx /= n; cy /= n
+      for (let i = 0; i < n; i++) {
+        ddx[i] += (cx - px[i]) * strength
+        ddy[i] += (cy - py[i]) * strength
+      }
+    },
+  }
+}
+
 // ─── Simulation loop ──────────────────────────────────────────────────────────
 
 export function forceDirectedGraph(config: ForceGraphConfig): Map<string, Pos> {
