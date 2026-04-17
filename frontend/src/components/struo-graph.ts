@@ -124,7 +124,10 @@ function forceLayout(
   const minDist = nodeR * 2.2
   const pad = nodeR + 4
 
+  const maxIter = 3000
   let temp = Math.min(width, height) * 0.15
+  // cooling: same final temp as 0.95^300, stretched over maxIter steps
+  const cooling = Math.pow(0.95, 300 / maxIter)
 
   // Build group membership lookup
   const nodeGroupIdx = new Map<string, number>()
@@ -141,7 +144,7 @@ function forceLayout(
   }
   const groupOf = (i: number): number => nodeGroupIdx.get(names[i]) ?? -1
 
-  for (let iter = 0; iter < 300; iter++) {
+  for (let iter = 0; iter < maxIter; iter++) {
     const ddx_arr = new Float64Array(n)
     const ddy_arr = new Float64Array(n)
 
@@ -246,14 +249,9 @@ function forceLayout(
         const gi = groupOf(i); const gj = groupOf(j)
         const crossGroup = gi !== gj || gi < 0
         if (crossGroup) {
-          // Cross-group: distribute force across all group members so the group moves
-          // as a unit toward the other endpoint, preventing individual members from
-          // being dragged together by separate edges to the same external node.
           const att = (dist * dist) / kOuter
-          const iMembers = gi >= 0 ? groupMemberIndices[gi] : [i]
-          const jMembers = gj >= 0 ? groupMemberIndices[gj] : [j]
-          for (const m of iMembers) { ddx_arr[m] += ux * att / iMembers.length; ddy_arr[m] += uy * att / iMembers.length }
-          for (const m of jMembers) { ddx_arr[m] -= ux * att / jMembers.length; ddy_arr[m] -= uy * att / jMembers.length }
+          ddx_arr[i] += ux * att; ddy_arr[i] += uy * att
+          ddx_arr[j] -= ux * att; ddy_arr[j] -= uy * att
         } else {
           const att = (dist * dist) / kInner
           ddx_arr[i] += ux * att; ddy_arr[i] += uy * att
@@ -267,16 +265,23 @@ function forceLayout(
     }
 
     // Apply displacements clamped to step size and bounds
+    let maxMove = 0
     for (let i = 0; i < n; i++) {
       const mag = Math.sqrt(ddx_arr[i] * ddx_arr[i] + ddy_arr[i] * ddy_arr[i])
       if (mag > 0.01) {
         const scale = Math.min(mag, temp) / mag
-        px[i] = Math.max(xMin + pad, Math.min(xMax - pad, px[i] + ddx_arr[i] * scale))
-        py[i] = Math.max(yMin + pad, Math.min(yMax - pad, py[i] + ddy_arr[i] * scale))
+        const dx = ddx_arr[i] * scale
+        const dy = ddy_arr[i] * scale
+        px[i] = Math.max(xMin + pad, Math.min(xMax - pad, px[i] + dx))
+        py[i] = Math.max(yMin + pad, Math.min(yMax - pad, py[i] + dy))
+        const moved = Math.sqrt(dx * dx + dy * dy)
+        if (moved > maxMove) maxMove = moved
       }
     }
 
-    temp *= 0.95
+    temp *= cooling
+    if (maxMove < temp * 0.05) { console.log(`forceLayout converged at iter ${iter + 1}, temp=${temp.toFixed(4)}, ratio=${(maxMove / temp).toFixed(4)}`); break }
+    if (iter === maxIter - 1) console.log(`forceLayout hit max iterations, temp=${temp.toFixed(4)}`)
   }
 
   const result = new Map<string, Pos>()
