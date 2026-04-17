@@ -57,21 +57,12 @@ const EDGE_COLORS = [
 ]
 
 const NODE_R = 28
-const CX = 250
-const CY = 250
-const ORBIT_R = 155
-const LEGEND_TOP = 520
-const VIEWBOX = '0 0 500 600'
 
 // Layout parameters for interactive mode (graph-objects as expandable bubbles).
 const EXPANDED = {
-  CX: 350, CY: 320,
-  OUTER_ORBIT_R: 200,
   BUBBLE_R: 75,
   INNER_NODE_R: 16,
   INNER_ORBIT_R: 38,
-  LEGEND_TOP: 650,
-  VIEWBOX: '0 0 700 720',
 } as const
 
 type Resolver = (name: string) => Pos | undefined
@@ -103,6 +94,22 @@ function centerPositions(pos: Map<string, Pos>, cx: number, cy: number): Map<str
   const out = new Map<string, Pos>()
   for (const [name, { x, y }] of pos) out.set(name, { x: x + dx, y: y + dy })
   return out
+}
+
+// computeViewBox derives a tight SVG viewBox from the bounding box of node centres + margin.
+// minBottom optionally extends the bottom edge (e.g. to include a legend row below the nodes).
+function computeViewBox(pos: Map<string, Pos>, nodeR: number, padding: number, minBottom = -Infinity): { viewBox: string; minX: number; minY: number } {
+  if (pos.size === 0) return { viewBox: '0 0 300 200', minX: 0, minY: 0 }
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (const { x, y } of pos.values()) {
+    if (x < minX) minX = x; if (x > maxX) maxX = x
+    if (y < minY) minY = y; if (y > maxY) maxY = y
+  }
+  const margin = nodeR + padding
+  const vx = Math.floor(minX - margin), vy = Math.floor(minY - margin)
+  const vw = Math.ceil(maxX + margin) - vx
+  const vh = Math.ceil(Math.max(maxY + margin, minBottom)) - vy
+  return { viewBox: `${vx} ${vy} ${vw} ${vh}`, minX, minY }
 }
 
 // minEnclosingCircle returns the smallest circle containing all given points (Ritter's algorithm).
@@ -230,8 +237,8 @@ function buildGraphSVG(data: GraphResponse, expandedNodes: Set<string>, prevBubb
   const n = objects.length
 
   if (n === 0) {
-    return `<svg viewBox="${VIEWBOX}" xmlns="http://www.w3.org/2000/svg">
-  <text x="250" y="250" text-anchor="middle" fill="#94a3b8" font-size="14">empty graph</text>
+    return `<svg viewBox="0 0 300 200" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+  <text x="150" y="100" text-anchor="middle" fill="#94a3b8" font-size="14">empty graph</text>
 </svg>`
   }
 
@@ -245,19 +252,26 @@ function buildGraphSVG(data: GraphResponse, expandedNodes: Set<string>, prevBubb
 function buildFlatSVG(data: GraphResponse): string {
   const objects = data.objects
   const seed = randomSeed(objects.map(o => o.name), NODE_R + 4, NODE_R + 4, 500 - NODE_R - 4, 480 - NODE_R - 4)
-  const pos = roundPositions(centerPositions(
+  const pos = roundPositions(
     alignHorizontal(forceDirectedGraph({
       nodes: objects.map(o => o.name), edges: data.arrows, initialPos: seed,
       bounds: { xMin: NODE_R + 4, yMin: NODE_R + 4, xMax: 500 - NODE_R - 4, yMax: 480 - NODE_R - 4 },
       nodeR: NODE_R,
       forces: [interGroupNodeRepel(1, 1), intraGroupEdgeSpring(0.15)],
-    })),
-    CX, CY,
-  ))
+    }))
+  )
+
+  let legendTop = -Infinity
+  for (const { y } of pos.values()) if (y > legendTop) legendTop = y
+  legendTop = Math.ceil(legendTop + NODE_R + 20)
+  const hasLegend = data.arrows.some(a => a.label)
+  const legendBottom = hasLegend ? legendTop + 16 + 12 : -Infinity
+
+  const { viewBox, minX } = computeViewBox(pos, NODE_R, 12, legendBottom)
 
   const resolve: Resolver = (name) => pos.get(name)
   const { markers, edgeGroups, legendItems } = buildEdgesAndLegend(
-    data.arrows, resolve, '', LEGEND_TOP, NODE_R,
+    data.arrows, resolve, '', legendTop, minX, NODE_R,
   )
 
   const nodeSvg = objects.map((obj, i) => {
@@ -270,7 +284,7 @@ function buildFlatSVG(data: GraphResponse): string {
   </g>`
   }).join('\n  ')
 
-  return `<svg viewBox="${VIEWBOX}" xmlns="http://www.w3.org/2000/svg">
+  return `<svg viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
   <defs>
     ${markers}
   </defs>
@@ -401,7 +415,7 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
     addJointEdge(from, to)
   }
 
-  const jointPos = roundPositions(centerPositions(
+  const jointPos = roundPositions(
     alignHorizontal(forceDirectedGraph({
       nodes: allNames, edges: jointEdges, initialPos: jointInitialPos,
       bounds: { xMin: EX.INNER_NODE_R + 4, yMin: EX.INNER_NODE_R + 4, xMax: 700 - EX.INNER_NODE_R - 4, yMax: 720 - EX.INNER_NODE_R - 4 },
@@ -413,9 +427,8 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
         interGroupEdgeSpring(),
         intraGroupEdgeSpring(0.15),
       ],
-    })),
-    350, 340,
-  ))
+    }))
+  )
 
   // Extract bubble and inner positions from joint result.
   const bubblePos = new Map<string, Pos>()
@@ -447,6 +460,34 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
     }
   }
 
+  // Build boundary positions using actual visual edge points for all objects.
+  // Expanded bubbles use their computed circle radius; collapsed nodes use their
+  // visual radius (NODE_R + 9 for the dashed ring, NODE_R for plain nodes).
+  const boundaryPos = new Map<string, Pos>()
+  for (const obj of objects) {
+    let cx: number, cy: number, r: number
+    if (expandedNodes.has(obj.name) && bubbleCircles.has(obj.name)) {
+      const b = bubbleCircles.get(obj.name)!
+      cx = b.cx; cy = b.cy; r = b.r
+    } else {
+      const bc = bubblePos.get(obj.name)!
+      cx = bc.x; cy = bc.y
+      r = obj.subGraph ? NODE_R + 9 : NODE_R
+    }
+    boundaryPos.set(`${obj.name}__N`, { x: cx, y: cy - r })
+    boundaryPos.set(`${obj.name}__S`, { x: cx, y: cy + r })
+    boundaryPos.set(`${obj.name}__E`, { x: cx + r, y: cy })
+    boundaryPos.set(`${obj.name}__W`, { x: cx - r, y: cy })
+  }
+  // boundaryPos edge points already represent visual extents; nodeR=0 in computeViewBox.
+  let legendTop = -Infinity
+  for (const { y } of boundaryPos.values()) if (y > legendTop) legendTop = y
+  legendTop = Math.ceil(legendTop + 16)
+  const hasLegend = displayArrows.some(a => a.label)
+  const legendBottom = hasLegend ? legendTop + 16 + 12 : -Infinity
+
+  const { viewBox, minX } = computeViewBox(boundaryPos, 0, 20, legendBottom)
+
   // Persist bubble positions so the next render can use them as stable seeds.
   for (const [name, pos] of bubblePos) prevBubblePos.set(name, pos)
 
@@ -457,11 +498,11 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
   const innerEdgeResults = objects.map((obj, i) => {
     if (!obj.subGraph || !expandedNodes.has(obj.name)) return { markers: '', edgeGroups: '', legendItems: '' }
     const innerResolver: Resolver = (name) => innerPos.get(name)
-    return buildEdgesAndLegend(obj.subGraph.arrows, innerResolver, `i${i}`, EX.LEGEND_TOP, EX.INNER_NODE_R)
+    return buildEdgesAndLegend(obj.subGraph.arrows, innerResolver, `i${i}`, legendTop, minX, EX.INNER_NODE_R)
   })
 
   // 5. Build outer/cross-boundary arrows.
-  const outerEdgeResult = buildEdgesAndLegend(displayArrows, resolver, 'o', EX.LEGEND_TOP, EX.INNER_NODE_R)
+  const outerEdgeResult = buildEdgesAndLegend(displayArrows, resolver, 'o', legendTop, minX, EX.INNER_NODE_R)
 
   const allMarkers = [...innerEdgeResults.map(r => r.markers), outerEdgeResult.markers]
     .filter(Boolean).join('\n    ')
@@ -513,7 +554,7 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
     })
   }).join('\n  ')
 
-  return `<svg viewBox="${EX.VIEWBOX}" xmlns="http://www.w3.org/2000/svg">
+  return `<svg viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
   <defs>
     ${allMarkers}
   </defs>
@@ -534,6 +575,7 @@ function buildEdgesAndLegend(
   resolve: Resolver,
   markerScope: string,
   legendTop: number,
+  legendX: number,
   nodeR: number,
 ): { markers: string; edgeGroups: string; legendItems: string } {
   const labelGroups = new Map<string | null, ArrowEntry[]>()
@@ -593,7 +635,7 @@ function buildEdgesAndLegend(
   const namedLabels = labelList.filter((l): l is string => l !== null)
   const legendItems = namedLabels.map((label, li) => {
     const color = EDGE_COLORS[li % EDGE_COLORS.length]
-    const lx = 20 + li * 80
+    const lx = legendX + li * 80
     return `<rect x="${lx}" y="${legendTop}" width="16" height="16" rx="3" fill="${color}"/>
     <text x="${lx + 22}" y="${legendTop + 12}" font-size="13" fill="#475569">${escapeHtml(label)}</text>`
   }).join('\n    ')
