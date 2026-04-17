@@ -357,3 +357,29 @@ export function roundPositions(pos: Map<string, Pos>): Map<string, Pos> {
   for (const [name, { x, y }] of pos) out.set(name, { x: Math.round(x), y: Math.round(y) })
   return out
 }
+
+export function alignHorizontal(pos: Map<string, Pos>): Map<string, Pos> {
+  const n = pos.size
+  if (n < 2) return pos
+
+  let cx = 0, cy = 0
+  for (const { x, y } of pos.values()) { cx += x; cy += y }
+  cx /= n; cy /= n
+
+  let cxx = 0, cxy = 0, cyy = 0
+  for (const { x, y } of pos.values()) {
+    const dx = x - cx, dy = y - cy
+    cxx += dx * dx; cxy += dx * dy; cyy += dy * dy
+  }
+
+  // angle of first principal component; rotate by -θ to align it with x-axis
+  const theta = 0.5 * Math.atan2(2 * cxy, cxx - cyy)
+  const cos = Math.cos(-theta), sin = Math.sin(-theta)
+
+  const out = new Map<string, Pos>()
+  for (const [name, { x, y }] of pos) {
+    const dx = x - cx, dy = y - cy
+    out.set(name, { x: cx + cos * dx - sin * dy, y: cy + sin * dx + cos * dy })
+  }
+  return out
+}

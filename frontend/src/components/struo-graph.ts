@@ -1,6 +1,6 @@
 import { escapeHtml } from '../utils.js'
 import {
-  forceDirectedGraph, roundPositions, interGroupNodeRepel, groupGravity, interGroupEdgeSpring, intraGroupEdgeSpring,
+  forceDirectedGraph, roundPositions, alignHorizontal, interGroupNodeRepel, groupGravity, interGroupEdgeSpring, intraGroupEdgeSpring,
   type Pos,
 } from './force-simulation.js'
 
@@ -246,12 +246,12 @@ function buildFlatSVG(data: GraphResponse): string {
   const objects = data.objects
   const seed = randomSeed(objects.map(o => o.name), NODE_R + 4, NODE_R + 4, 500 - NODE_R - 4, 480 - NODE_R - 4)
   const pos = roundPositions(centerPositions(
-    forceDirectedGraph({
+    alignHorizontal(forceDirectedGraph({
       nodes: objects.map(o => o.name), edges: data.arrows, initialPos: seed,
       bounds: { xMin: NODE_R + 4, yMin: NODE_R + 4, xMax: 500 - NODE_R - 4, yMax: 480 - NODE_R - 4 },
       nodeR: NODE_R,
       forces: [interGroupNodeRepel(1, 1), intraGroupEdgeSpring(0.15)],
-    }),
+    })),
     CX, CY,
   ))
 
@@ -402,7 +402,7 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
   }
 
   const jointPos = roundPositions(centerPositions(
-    forceDirectedGraph({
+    alignHorizontal(forceDirectedGraph({
       nodes: allNames, edges: jointEdges, initialPos: jointInitialPos,
       bounds: { xMin: EX.INNER_NODE_R + 4, yMin: EX.INNER_NODE_R + 4, xMax: 700 - EX.INNER_NODE_R - 4, yMax: 720 - EX.INNER_NODE_R - 4 },
       nodeR: EX.INNER_NODE_R,
@@ -413,7 +413,7 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
         interGroupEdgeSpring(),
         intraGroupEdgeSpring(0.15),
       ],
-    }),
+    })),
     350, 340,
   ))
 
