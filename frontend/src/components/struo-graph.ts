@@ -292,14 +292,20 @@ function buildFlatSVG(data: GraphResponse, containerRatio: number): string {
   let legendTop = -Infinity
   for (const { y } of pos.values()) if (y > legendTop) legendTop = y
   legendTop = Math.ceil(legendTop + NODE_R + 20)
-  const hasLegend = data.arrows.some(a => a.label)
-  const legendBottom = hasLegend ? legendTop + 16 + 12 : -Infinity
+  const totalNamedFlat = countNamedLabels(data.arrows)
+  const hasLegend = totalNamedFlat > 0
+
+  const { viewBox: probeVB } = computeViewBox(pos, NODE_R, 12, -Infinity, containerRatio)
+  const probeVw = Number(probeVB.split(' ')[2])
+  const itemsPerRow = Math.max(1, Math.floor(probeVw / 80))
+  const legendRows = hasLegend ? Math.ceil(totalNamedFlat / itemsPerRow) : 0
+  const legendBottom = hasLegend ? legendTop + legendRows * 28 : -Infinity
 
   const { viewBox, minX } = computeViewBox(pos, NODE_R, 12, legendBottom, containerRatio)
 
   const resolve: Resolver = (name) => pos.get(name)
   const { markers, edgeGroups, legendItems } = buildEdgesAndLegend(
-    data.arrows, resolve, '', legendTop, minX, NODE_R,
+    data.arrows, resolve, '', legendTop, minX, NODE_R, 0, itemsPerRow,
   )
 
   const nodeSvg = objects.map((obj, i) => {
@@ -511,8 +517,16 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
   let legendTop = -Infinity
   for (const { y } of boundaryPos.values()) if (y > legendTop) legendTop = y
   legendTop = Math.ceil(legendTop + 16)
-  const hasLegend = displayArrows.some(a => a.label)
-  const legendBottom = hasLegend ? legendTop + 16 + 12 : -Infinity
+  const innerNamedCount = objects.reduce((sum, obj) =>
+    obj.subGraph && expandedNodes.has(obj.name) ? sum + countNamedLabels(obj.subGraph.arrows) : sum, 0)
+  const totalNamedInteractive = innerNamedCount + countNamedLabels(displayArrows)
+  const hasLegend = totalNamedInteractive > 0
+
+  const { viewBox: probeVB } = computeViewBox(boundaryPos, 0, 20, -Infinity, containerRatio)
+  const probeVw = Number(probeVB.split(' ')[2])
+  const itemsPerRow = Math.max(1, Math.floor(probeVw / 80))
+  const legendRows = hasLegend ? Math.ceil(totalNamedInteractive / itemsPerRow) : 0
+  const legendBottom = hasLegend ? legendTop + legendRows * 28 : -Infinity
 
   const { viewBox, minX } = computeViewBox(boundaryPos, 0, 20, legendBottom, containerRatio)
 
@@ -523,18 +537,23 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
     resolveEndpoint(name, innerToParent, bubblePos, innerPos, expandedNodes)
 
   // 4. Build inner arrows for each expanded node (scoped markers).
+  let colorOffset = 0
   const innerEdgeResults = objects.map((obj, i) => {
     if (!obj.subGraph || !expandedNodes.has(obj.name)) return { markers: '', edgeGroups: '', legendItems: '' }
     const innerResolver: Resolver = (name) => innerPos.get(name)
-    return buildEdgesAndLegend(obj.subGraph.arrows, innerResolver, `i${i}`, legendTop, minX, EX.INNER_NODE_R)
+    const result = buildEdgesAndLegend(obj.subGraph.arrows, innerResolver, `i${i}`, legendTop, minX, EX.INNER_NODE_R, colorOffset, itemsPerRow)
+    colorOffset += countNamedLabels(obj.subGraph.arrows)
+    return result
   })
 
   // 5. Build outer/cross-boundary arrows.
-  const outerEdgeResult = buildEdgesAndLegend(displayArrows, resolver, 'o', legendTop, minX, EX.INNER_NODE_R)
+  const outerEdgeResult = buildEdgesAndLegend(displayArrows, resolver, 'o', legendTop, minX, EX.INNER_NODE_R, colorOffset, itemsPerRow)
 
   const allMarkers = [...innerEdgeResults.map(r => r.markers), outerEdgeResult.markers]
     .filter(Boolean).join('\n    ')
   const innerArrowsSvg = innerEdgeResults.map(r => r.edgeGroups).join('\n  ')
+  const allLegendItems = [...innerEdgeResults.map(r => r.legendItems), outerEdgeResult.legendItems]
+    .filter(Boolean).join('\n    ')
 
   // 6. Render object circles/bubbles.
   const objectsSvg = objects.map((obj, i) => {
@@ -591,13 +610,20 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
   ${innerNodeSvg}
   ${outerEdgeResult.edgeGroups}
   <g class="graph-legend">
-    ${outerEdgeResult.legendItems}
+    ${allLegendItems}
   </g>
 </svg>`
 }
 
+function countNamedLabels(arrows: ArrowEntry[]): number {
+  const seen = new Set<string>()
+  for (const e of arrows) { if (e.label) seen.add(e.label) }
+  return seen.size
+}
+
 // buildEdgesAndLegend groups arrows by label, builds SVG markers, edge paths, and legend.
 // markerScope prefixes marker IDs to avoid collisions when multiple calls share one SVG.
+// colorOffset shifts the color palette index so multiple calls don't reuse the same colors.
 function buildEdgesAndLegend(
   arrows: ArrowEntry[],
   resolve: Resolver,
@@ -605,6 +631,8 @@ function buildEdgesAndLegend(
   legendTop: number,
   legendX: number,
   nodeR: number,
+  colorOffset: number = 0,
+  itemsPerRow: number = Infinity,
 ): { markers: string; edgeGroups: string; legendItems: string } {
   const labelGroups = new Map<string | null, ArrowEntry[]>()
   for (const e of arrows) {
@@ -627,7 +655,7 @@ function buildEdgesAndLegend(
 
   const scopePrefix = markerScope ? `${markerScope}-` : ''
   const markers = labelList.map((label, li) => {
-    const color = label === null ? UNLABELED_COLOR : EDGE_COLORS[li % EDGE_COLORS.length]
+    const color = label === null ? UNLABELED_COLOR : EDGE_COLORS[(colorOffset + li) % EDGE_COLORS.length]
     const id = `${scopePrefix}a${li}`
     return `<marker id="${id}" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
       <polygon points="0 0, 8 3, 0 6" fill="${color}"/>
@@ -635,7 +663,7 @@ function buildEdgesAndLegend(
   }).join('\n    ')
 
   const edgeGroups = labelList.map((label, li) => {
-    const color = label === null ? UNLABELED_COLOR : EDGE_COLORS[li % EDGE_COLORS.length]
+    const color = label === null ? UNLABELED_COLOR : EDGE_COLORS[(colorOffset + li) % EDGE_COLORS.length]
     const markerId = `${scopePrefix}a${li}`
     const entries = labelGroups.get(label)!
 
@@ -662,10 +690,14 @@ function buildEdgesAndLegend(
 
   const namedLabels = labelList.filter((l): l is string => l !== null)
   const legendItems = namedLabels.map((label, li) => {
-    const color = EDGE_COLORS[li % EDGE_COLORS.length]
-    const lx = legendX + li * 80
-    return `<rect x="${lx}" y="${legendTop}" width="16" height="16" rx="3" fill="${color}"/>
-    <text x="${lx + 22}" y="${legendTop + 12}" font-size="13" fill="#475569">${escapeHtml(label)}</text>`
+    const globalIndex = colorOffset + li
+    const color = EDGE_COLORS[globalIndex % EDGE_COLORS.length]
+    const col = globalIndex % itemsPerRow
+    const row = Math.floor(globalIndex / itemsPerRow)
+    const lx = legendX + col * 80
+    const ly = legendTop + row * 28
+    return `<rect x="${lx}" y="${ly}" width="16" height="16" rx="3" fill="${color}"/>
+    <text x="${lx + 22}" y="${ly + 12}" font-size="13" fill="#475569">${escapeHtml(label)}</text>`
   }).join('\n    ')
 
   return { markers, edgeGroups, legendItems }
