@@ -1,4 +1,8 @@
 import { escapeHtml } from '../utils.js'
+import {
+  forceDirectedGraph, interGroupNodeRepel, groupGravity, interGroupEdgeSpring, intraGroupEdgeSpring,
+  type Pos,
+} from './force-simulation.js'
 
 interface ArrowEntry {
   label?: string
@@ -70,7 +74,6 @@ const EXPANDED = {
   VIEWBOX: '0 0 700 720',
 } as const
 
-type Pos = { x: number; y: number }
 type Resolver = (name: string) => Pos | undefined
 
 // randomSeed places each name at a uniformly random position within the given bounds.
@@ -85,208 +88,6 @@ function randomSeed(
     })
   }
   return into
-}
-
-// forceLayout refines positions using a Fruchterman-Reingold-lite simulation.
-// - names: the moveable nodes
-// - edges: springs; endpoints may be names (moveable) or keys in pinned (fixed anchors)
-// - initialPos: seed positions for moveable nodes
-// - xMin/yMin/xMax/yMax: clamping bounds
-// - pinned: optional fixed external nodes that exert spring attraction but don't move
-// - kFixed: intra-group ideal distance (used as kInner when groups are present)
-// - groups: subsets of names that form cohesive groups; inter-group forces use kOuter
-//   derived from area/n. The group CoM repels other groups/nodes; cohesion springs
-//   pull each member toward its CoM.
-function forceLayout(
-  names: string[],
-  edges: Array<{ from: string; to: string }>,
-  initialPos: Map<string, Pos>,
-  xMin: number, yMin: number, xMax: number, yMax: number,
-  nodeR: number,
-  pinned?: Map<string, Pos>,
-  kFixed?: number,
-  groups?: Array<string[]>,
-): Map<string, Pos> {
-  const n = names.length
-  if (n <= 1) return new Map(initialPos)
-
-  const px = names.map(name => initialPos.get(name)!.x as number)
-  const py = names.map(name => initialPos.get(name)!.y as number)
-  const nameIdx = new Map(names.map((name, i) => [name, i]))
-
-  const width = xMax - xMin
-  const height = yMax - yMin
-  // kOuter: inter-group ideal distance, always area-derived
-  const kOuter = Math.sqrt((width * height) / n) * 0.9
-  // kInner: intra-group ideal distance (kFixed when groups present, else kOuter)
-  const kInner = (groups && kFixed !== undefined) ? kFixed : kOuter
-
-  const minDist = nodeR * 2.2
-  const pad = nodeR + 4
-
-  const maxIter = 3000
-  let temp = Math.min(width, height) * 0.15
-  // cooling: same final temp as 0.95^300, stretched over maxIter steps
-  const cooling = Math.pow(0.95, 300 / maxIter)
-
-  // Build group membership lookup
-  const nodeGroupIdx = new Map<string, number>()
-  const groupMemberIndices: number[][] = []
-  if (groups) {
-    groups.forEach((grp, gi) => {
-      const indices: number[] = []
-      for (const nm of grp) {
-        const i = nameIdx.get(nm)
-        if (i !== undefined) { nodeGroupIdx.set(nm, gi); indices.push(i) }
-      }
-      groupMemberIndices.push(indices)
-    })
-  }
-  const groupOf = (i: number): number => nodeGroupIdx.get(names[i]) ?? -1
-
-  for (let iter = 0; iter < maxIter; iter++) {
-    const ddx_arr = new Float64Array(n)
-    const ddy_arr = new Float64Array(n)
-
-    if (!groups) {
-      // No groups: standard all-pairs repulsion with kInner (= kOuter)
-      for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-          let ddx = px[i] - px[j]; let ddy = py[i] - py[j]
-          let dist = Math.sqrt(ddx * ddx + ddy * ddy)
-          if (dist < 0.01) { ddx = 0.1; ddy = 0.1; dist = 0.14 }
-          const rep = (kInner * kInner) / Math.max(dist, minDist)
-          const ux = ddx / dist; const uy = ddy / dist
-          ddx_arr[i] += ux * rep; ddy_arr[i] += uy * rep
-          ddx_arr[j] -= ux * rep; ddy_arr[j] -= uy * rep
-        }
-      }
-    } else {
-      // (A) Intra-group node-node repulsion (kInner).
-      // The ×4 multiplier counters cross-group springs that get distributed to all group
-      // members and would otherwise dominate, preventing inner nodes from spreading apart.
-      for (const members of groupMemberIndices) {
-        for (let a = 0; a < members.length; a++) {
-          for (let b = a + 1; b < members.length; b++) {
-            const i = members[a]; const j = members[b]
-            let ddx = px[i] - px[j]; let ddy = py[i] - py[j]
-            let dist = Math.sqrt(ddx * ddx + ddy * ddy)
-            if (dist < 0.01) { ddx = 0.1; ddy = 0.1; dist = 0.14 }
-            const rep = (kInner * kInner * 4) / Math.max(dist, minDist)
-            const ux = ddx / dist; const uy = ddy / dist
-            ddx_arr[i] += ux * rep; ddy_arr[i] += uy * rep
-            ddx_arr[j] -= ux * rep; ddy_arr[j] -= uy * rep
-          }
-        }
-      }
-
-      // (B) Super-node CoM repulsion (kOuter)
-      // Each group → one super-node at its CoM; each ungrouped node → its own super-node.
-      type SuperNode = { x: number; y: number; indices: number[] }
-      const superNodes: SuperNode[] = []
-      for (const members of groupMemberIndices) {
-        if (members.length === 0) continue
-        let cx = 0; let cy = 0
-        for (const i of members) { cx += px[i]; cy += py[i] }
-        superNodes.push({ x: cx / members.length, y: cy / members.length, indices: members })
-      }
-      for (let i = 0; i < n; i++) {
-        if (groupOf(i) < 0) superNodes.push({ x: px[i], y: py[i], indices: [i] })
-      }
-
-      const minDistOuter = Math.max(minDist, kOuter * 0.3)
-      for (let a = 0; a < superNodes.length; a++) {
-        for (let b = a + 1; b < superNodes.length; b++) {
-          const sa = superNodes[a]; const sb = superNodes[b]
-          let ddx = sa.x - sb.x; let ddy = sa.y - sb.y
-          let dist = Math.sqrt(ddx * ddx + ddy * ddy)
-          if (dist < 0.01) { ddx = 0.1; ddy = 0.1; dist = 0.14 }
-          const rep = (kOuter * kOuter) / Math.max(dist, minDistOuter)
-          const ux = ddx / dist; const uy = ddy / dist
-          for (const i of sa.indices) { ddx_arr[i] += ux * rep / sa.indices.length; ddy_arr[i] += uy * rep / sa.indices.length }
-          for (const j of sb.indices) { ddx_arr[j] -= ux * rep / sb.indices.length; ddy_arr[j] -= uy * rep / sb.indices.length }
-        }
-      }
-
-      // (C) Cohesion: weak spring toward group CoM, keeping the group from drifting apart
-      // without over-compressing it. Factor of 4 gives equilibrium at ~2.5×kInner spacing.
-      for (const sn of superNodes) {
-        if (sn.indices.length < 2) continue
-        for (const i of sn.indices) {
-          const ddx = sn.x - px[i]; const ddy = sn.y - py[i]
-          const dist = Math.sqrt(ddx * ddx + ddy * ddy)
-          if (dist < 0.01) continue
-          const att = (dist * dist) / (kInner * 2)
-          const ux = ddx / dist; const uy = ddy / dist
-          ddx_arr[i] += ux * att; ddy_arr[i] += uy * att
-        }
-      }
-    }
-
-    // Spring attraction along edges
-    for (const e of edges) {
-      const i = nameIdx.get(e.from)
-      const j = nameIdx.get(e.to)
-      const fromPinned = pinned?.get(e.from)
-      const toPinned = pinned?.get(e.to)
-      const fromPos: { x: number; y: number } | undefined =
-        i !== undefined ? { x: px[i], y: py[i] } : fromPinned
-      const toPos: { x: number; y: number } | undefined =
-        j !== undefined ? { x: px[j], y: py[j] } : toPinned
-      if (!fromPos || !toPos) continue
-
-      const isPinnedEdge = fromPinned !== undefined || toPinned !== undefined
-      const ddx = toPos.x - fromPos.x; const ddy = toPos.y - fromPos.y
-      const dist = Math.sqrt(ddx * ddx + ddy * ddy)
-      if (dist < 0.01) continue
-      const ux = ddx / dist; const uy = ddy / dist
-
-      if (isPinnedEdge) {
-        const att = kInner * 0.15
-        if (i !== undefined) { ddx_arr[i] += ux * att; ddy_arr[i] += uy * att }
-        if (j !== undefined) { ddx_arr[j] -= ux * att; ddy_arr[j] -= uy * att }
-      } else if (groups && i !== undefined && j !== undefined) {
-        const gi = groupOf(i); const gj = groupOf(j)
-        const crossGroup = gi !== gj || gi < 0
-        if (crossGroup) {
-          const att = (dist * dist) / kOuter
-          ddx_arr[i] += ux * att; ddy_arr[i] += uy * att
-          ddx_arr[j] -= ux * att; ddy_arr[j] -= uy * att
-        } else {
-          const att = (dist * dist) / kInner
-          ddx_arr[i] += ux * att; ddy_arr[i] += uy * att
-          ddx_arr[j] -= ux * att; ddy_arr[j] -= uy * att
-        }
-      } else {
-        const att = (dist * dist) / kInner
-        if (i !== undefined) { ddx_arr[i] += ux * att; ddy_arr[i] += uy * att }
-        if (j !== undefined) { ddx_arr[j] -= ux * att; ddy_arr[j] -= uy * att }
-      }
-    }
-
-    // Apply displacements clamped to step size and bounds
-    let maxMove = 0
-    for (let i = 0; i < n; i++) {
-      const mag = Math.sqrt(ddx_arr[i] * ddx_arr[i] + ddy_arr[i] * ddy_arr[i])
-      if (mag > 0.01) {
-        const scale = Math.min(mag, temp) / mag
-        const dx = ddx_arr[i] * scale
-        const dy = ddy_arr[i] * scale
-        px[i] = Math.max(xMin + pad, Math.min(xMax - pad, px[i] + dx))
-        py[i] = Math.max(yMin + pad, Math.min(yMax - pad, py[i] + dy))
-        const moved = Math.sqrt(dx * dx + dy * dy)
-        if (moved > maxMove) maxMove = moved
-      }
-    }
-
-    temp *= cooling
-    if (maxMove < temp * 0.05) { console.log(`forceLayout converged at iter ${iter + 1}, temp=${temp.toFixed(4)}, ratio=${(maxMove / temp).toFixed(4)}`); break }
-    if (iter === maxIter - 1) console.log(`forceLayout hit max iterations, temp=${temp.toFixed(4)}`)
-  }
-
-  const result = new Map<string, Pos>()
-  names.forEach((name, i) => result.set(name, { x: Math.round(px[i]), y: Math.round(py[i]) }))
-  return result
 }
 
 // centerPositions translates all positions so their bounding-box centre aligns with (cx, cy).
@@ -445,11 +246,12 @@ function buildFlatSVG(data: GraphResponse): string {
   const objects = data.objects
   const seed = randomSeed(objects.map(o => o.name), NODE_R + 4, NODE_R + 4, 500 - NODE_R - 4, 480 - NODE_R - 4)
   const pos = centerPositions(
-    forceLayout(
-      objects.map(o => o.name), data.arrows, seed,
-      NODE_R + 4, NODE_R + 4, 500 - NODE_R - 4, 480 - NODE_R - 4,
-      NODE_R,
-    ),
+    forceDirectedGraph({
+      nodes: objects.map(o => o.name), edges: data.arrows, initialPos: seed,
+      bounds: { xMin: NODE_R + 4, yMin: NODE_R + 4, xMax: 500 - NODE_R - 4, yMax: 480 - NODE_R - 4 },
+      nodeR: NODE_R,
+      forces: [interGroupNodeRepel(1, 1), intraGroupEdgeSpring(0.15)],
+    }),
     CX, CY,
   )
 
@@ -599,18 +401,19 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
     addJointEdge(from, to)
   }
 
-  // Run the joint simulation. kFixed = INNER_ORBIT_R controls intra-group spacing;
-  // kOuter is derived from canvas area / node count for inter-group spacing.
   const jointPos = centerPositions(
-    forceLayout(
-      allNames, jointEdges, jointInitialPos,
-      EX.INNER_NODE_R + 4, EX.INNER_NODE_R + 4,
-      700 - EX.INNER_NODE_R - 4, 720 - EX.INNER_NODE_R - 4,
-      EX.INNER_NODE_R,
-      undefined,
-      EX.INNER_ORBIT_R,
-      groups,
-    ),
+    forceDirectedGraph({
+      nodes: allNames, edges: jointEdges, initialPos: jointInitialPos,
+      bounds: { xMin: EX.INNER_NODE_R + 4, yMin: EX.INNER_NODE_R + 4, xMax: 700 - EX.INNER_NODE_R - 4, yMax: 720 - EX.INNER_NODE_R - 4 },
+      nodeR: EX.INNER_NODE_R,
+      kFixed: EX.INNER_ORBIT_R, groups,
+      forces: [
+        interGroupNodeRepel(4, 1),
+        groupGravity(0.5),
+        interGroupEdgeSpring(),
+        intraGroupEdgeSpring(0.15),
+      ],
+    }),
     350, 340,
   )
 
