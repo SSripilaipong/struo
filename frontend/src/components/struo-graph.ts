@@ -73,24 +73,18 @@ const EXPANDED = {
 type Pos = { x: number; y: number }
 type Resolver = (name: string) => Pos | undefined
 
-// placeOnOrbit distributes n items evenly on a circle and populates a Map with their positions.
-// Single items are placed at the centre.
-function placeOnOrbit(
-  names: string[], cx: number, cy: number, orbitR: number,
-  into: Map<string, Pos>,
-): void {
-  const n = names.length
-  if (n === 1) {
-    into.set(names[0], { x: cx, y: cy })
-  } else {
-    names.forEach((name, i) => {
-      const angle = (2 * Math.PI * i / n) - Math.PI / 2
-      into.set(name, {
-        x: Math.round(cx + orbitR * Math.cos(angle)),
-        y: Math.round(cy + orbitR * Math.sin(angle)),
-      })
+// randomSeed places each name at a uniformly random position within the given bounds.
+function randomSeed(
+  names: string[], xMin: number, yMin: number, xMax: number, yMax: number,
+): Map<string, Pos> {
+  const into = new Map<string, Pos>()
+  for (const name of names) {
+    into.set(name, {
+      x: Math.round(xMin + Math.random() * (xMax - xMin)),
+      y: Math.round(yMin + Math.random() * (yMax - yMin)),
     })
   }
+  return into
 }
 
 // forceLayout refines positions using a Fruchterman-Reingold-lite simulation.
@@ -290,6 +284,21 @@ function forceLayout(
   return result
 }
 
+// centerPositions translates all positions so their bounding-box centre aligns with (cx, cy).
+function centerPositions(pos: Map<string, Pos>, cx: number, cy: number): Map<string, Pos> {
+  if (pos.size === 0) return pos
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (const { x, y } of pos.values()) {
+    if (x < minX) minX = x; if (x > maxX) maxX = x
+    if (y < minY) minY = y; if (y > maxY) maxY = y
+  }
+  const dx = Math.round(cx - (minX + maxX) / 2)
+  const dy = Math.round(cy - (minY + maxY) / 2)
+  const out = new Map<string, Pos>()
+  for (const [name, { x, y }] of pos) out.set(name, { x: x + dx, y: y + dy })
+  return out
+}
+
 // minEnclosingCircle returns the smallest circle containing all given points (Ritter's algorithm).
 function minEnclosingCircle(pts: Pos[]): { cx: number; cy: number; r: number } {
   if (pts.length === 0) return { cx: 0, cy: 0, r: 0 }
@@ -353,6 +362,7 @@ class StruoGraph extends HTMLElement {
 
   private cachedData: GraphResponse | null = null
   private expandedNodes = new Set<string>()
+  private prevBubblePos = new Map<string, Pos>()
 
   connectedCallback(): void {
     this.render()
@@ -393,7 +403,7 @@ class StruoGraph extends HTMLElement {
   }
 
   private _renderSVG(): void {
-    const svg = buildGraphSVG(this.cachedData!, this.expandedNodes)
+    const svg = buildGraphSVG(this.cachedData!, this.expandedNodes, this.prevBubblePos)
     this.querySelector('.graph-container')!.innerHTML = svg
     this._attachHandlers()
   }
@@ -409,7 +419,7 @@ class StruoGraph extends HTMLElement {
   }
 }
 
-function buildGraphSVG(data: GraphResponse, expandedNodes: Set<string>): string {
+function buildGraphSVG(data: GraphResponse, expandedNodes: Set<string>, prevBubblePos: Map<string, Pos>): string {
   const objects = data.objects
   const n = objects.length
 
@@ -421,19 +431,21 @@ function buildGraphSVG(data: GraphResponse, expandedNodes: Set<string>): string 
 
   const hasSubGraphs = objects.some(o => o.subGraph != null)
   return hasSubGraphs
-    ? buildInteractiveSVG(data, expandedNodes)
+    ? buildInteractiveSVG(data, expandedNodes, prevBubblePos)
     : buildFlatSVG(data)
 }
 
 // buildFlatSVG renders graphs whose objects are all plain nodes (no sub-graphs).
 function buildFlatSVG(data: GraphResponse): string {
   const objects = data.objects
-  const seed = new Map<string, Pos>()
-  placeOnOrbit(objects.map(o => o.name), CX, CY, ORBIT_R, seed)
-  const pos = forceLayout(
-    objects.map(o => o.name), data.arrows, seed,
-    NODE_R + 4, NODE_R + 4, 500 - NODE_R - 4, 480 - NODE_R - 4,
-    NODE_R,
+  const seed = randomSeed(objects.map(o => o.name), NODE_R + 4, NODE_R + 4, 500 - NODE_R - 4, 480 - NODE_R - 4)
+  const pos = centerPositions(
+    forceLayout(
+      objects.map(o => o.name), data.arrows, seed,
+      NODE_R + 4, NODE_R + 4, 500 - NODE_R - 4, 480 - NODE_R - 4,
+      NODE_R,
+    ),
+    CX, CY,
   )
 
   const resolve: Resolver = (name) => pos.get(name)
@@ -469,7 +481,7 @@ function buildFlatSVG(data: GraphResponse): string {
 // Layout uses a single joint force simulation: non-expanded nodes are ungrouped,
 // inner nodes of each expanded object form a group. Group CoMs repel each other and
 // ungrouped nodes; cohesion springs keep group members together.
-function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>): string {
+function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, prevBubblePos: Map<string, Pos>): string {
   const objects = data.objects
   const EX = EXPANDED
 
@@ -510,9 +522,17 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>): s
   const jointInitialPos = new Map<string, Pos>()
   const groups: Array<string[]> = []
 
-  // Seed top-level objects on outer orbit for initial positions.
+  // Seed each top-level object: reuse its last known position if available,
+  // otherwise place it randomly (first render only).
   const bubbleSeed = new Map<string, Pos>()
-  placeOnOrbit(objects.map(o => o.name), EX.CX, EX.CY, EX.OUTER_ORBIT_R, bubbleSeed)
+  const xMin = EX.INNER_NODE_R + 4, yMin = EX.INNER_NODE_R + 4
+  const xMax = 700 - EX.INNER_NODE_R - 4, yMax = 720 - EX.INNER_NODE_R - 4
+  for (const obj of objects) {
+    bubbleSeed.set(obj.name, prevBubblePos.get(obj.name) ?? {
+      x: Math.round(xMin + Math.random() * (xMax - xMin)),
+      y: Math.round(yMin + Math.random() * (yMax - yMin)),
+    })
+  }
 
   // Non-expanded nodes enter the simulation as ungrouped.
   for (const obj of objects) {
@@ -522,50 +542,21 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>): s
     }
   }
 
-  // Expanded nodes: seed inner nodes around the bubble seed centre using
-  // topology-aware angles, then register them as a group.
+  // Expanded nodes: seed inner nodes tightly around the parent's seed position
+  // (which is the previous bubble position if known, else random).
   for (const obj of objects) {
     if (!obj.subGraph || !expandedNodes.has(obj.name)) continue
     const bc = bubbleSeed.get(obj.name)!
     const innerNames = obj.subGraph.objects.map(o => o.name)
-    const innerNodeSet = new Set(innerNames)
-    const n = innerNames.length
 
-    const hasExternal = new Set<string>()
-    let sumDx = 0, sumDy = 0, extCount = 0
-    for (const arrow of data.arrows) {
-      const fromInner = innerNodeSet.has(arrow.from)
-      const toInner = innerNodeSet.has(arrow.to)
-      if (fromInner === toInner) continue
-      const extName = fromInner ? arrow.to : arrow.from
-      const innerName = fromInner ? arrow.from : arrow.to
-      const extParent = innerToParent.get(extName)
-      const extPos = extParent === undefined ? bubbleSeed.get(extName) : bubbleSeed.get(extParent)
-      if (!extPos) continue
-      hasExternal.add(innerName)
-      sumDx += extPos.x - bc.x
-      sumDy += extPos.y - bc.y
-      extCount++
-    }
-    const sortedNames = [
-      ...innerNames.filter(nm => hasExternal.has(nm)),
-      ...innerNames.filter(nm => !hasExternal.has(nm)),
-    ]
-    const nExt = sortedNames.filter(nm => hasExternal.has(nm)).length
-    const extAngle = extCount > 0 ? Math.atan2(sumDy / extCount, sumDx / extCount) : Math.PI / 2
-    const startAngle = extCount > 0
-      ? extAngle - ((nExt - 1) / 2) * (2 * Math.PI / n)
-      : -Math.PI / 2
-
-    sortedNames.forEach((nm, idx) => {
-      const angle = (2 * Math.PI * idx / n) + startAngle
+    for (const nm of innerNames) {
       jointInitialPos.set(nm, {
-        x: Math.round(bc.x + EX.INNER_ORBIT_R * Math.cos(angle)),
-        y: Math.round(bc.y + EX.INNER_ORBIT_R * Math.sin(angle)),
+        x: Math.round(bc.x + (Math.random() * 2 - 1) * 4),
+        y: Math.round(bc.y + (Math.random() * 2 - 1) * 4),
       })
-    })
+    }
     groups.push(innerNames)
-    allNames.push(...sortedNames)
+    allNames.push(...innerNames)
   }
 
   // Resolve an arrow endpoint name to its simulation node name:
@@ -605,14 +596,17 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>): s
 
   // Run the joint simulation. kFixed = INNER_ORBIT_R controls intra-group spacing;
   // kOuter is derived from canvas area / node count for inter-group spacing.
-  const jointPos = forceLayout(
-    allNames, jointEdges, jointInitialPos,
-    EX.INNER_NODE_R + 4, EX.INNER_NODE_R + 4,
-    700 - EX.INNER_NODE_R - 4, 720 - EX.INNER_NODE_R - 4,
-    EX.INNER_NODE_R,
-    undefined,
-    EX.INNER_ORBIT_R,
-    groups,
+  const jointPos = centerPositions(
+    forceLayout(
+      allNames, jointEdges, jointInitialPos,
+      EX.INNER_NODE_R + 4, EX.INNER_NODE_R + 4,
+      700 - EX.INNER_NODE_R - 4, 720 - EX.INNER_NODE_R - 4,
+      EX.INNER_NODE_R,
+      undefined,
+      EX.INNER_ORBIT_R,
+      groups,
+    ),
+    350, 340,
   )
 
   // Extract bubble and inner positions from joint result.
@@ -644,6 +638,9 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>): s
       bubbleCircles.set(obj.name, { cx: enc.cx, cy: enc.cy, r: enc.r + EX.INNER_NODE_R + 12 })
     }
   }
+
+  // Persist bubble positions so the next render can use them as stable seeds.
+  for (const [name, pos] of bubblePos) prevBubblePos.set(name, pos)
 
   const resolver: Resolver = (name) =>
     resolveEndpoint(name, innerToParent, bubblePos, innerPos, expandedNodes)
