@@ -1,6 +1,6 @@
 import { escapeHtml } from '../utils.js'
 import {
-  forceDirectedGraph, interGroupNodeRepel, groupGravity, interGroupEdgeSpring, intraGroupEdgeSpring,
+  forceDirectedGraph, roundPositions, interGroupNodeRepel, groupGravity, interGroupEdgeSpring, intraGroupEdgeSpring,
   type Pos,
 } from './force-simulation.js'
 
@@ -245,7 +245,7 @@ function buildGraphSVG(data: GraphResponse, expandedNodes: Set<string>, prevBubb
 function buildFlatSVG(data: GraphResponse): string {
   const objects = data.objects
   const seed = randomSeed(objects.map(o => o.name), NODE_R + 4, NODE_R + 4, 500 - NODE_R - 4, 480 - NODE_R - 4)
-  const pos = centerPositions(
+  const pos = roundPositions(centerPositions(
     forceDirectedGraph({
       nodes: objects.map(o => o.name), edges: data.arrows, initialPos: seed,
       bounds: { xMin: NODE_R + 4, yMin: NODE_R + 4, xMax: 500 - NODE_R - 4, yMax: 480 - NODE_R - 4 },
@@ -253,7 +253,7 @@ function buildFlatSVG(data: GraphResponse): string {
       forces: [interGroupNodeRepel(1, 1), intraGroupEdgeSpring(0.15)],
     }),
     CX, CY,
-  )
+  ))
 
   const resolve: Resolver = (name) => pos.get(name)
   const { markers, edgeGroups, legendItems } = buildEdgesAndLegend(
@@ -401,7 +401,7 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
     addJointEdge(from, to)
   }
 
-  const jointPos = centerPositions(
+  const jointPos = roundPositions(centerPositions(
     forceDirectedGraph({
       nodes: allNames, edges: jointEdges, initialPos: jointInitialPos,
       bounds: { xMin: EX.INNER_NODE_R + 4, yMin: EX.INNER_NODE_R + 4, xMax: 700 - EX.INNER_NODE_R - 4, yMax: 720 - EX.INNER_NODE_R - 4 },
@@ -415,7 +415,7 @@ function buildInteractiveSVG(data: GraphResponse, expandedNodes: Set<string>, pr
       ],
     }),
     350, 340,
-  )
+  ))
 
   // Extract bubble and inner positions from joint result.
   const bubblePos = new Map<string, Pos>()

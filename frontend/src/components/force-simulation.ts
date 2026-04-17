@@ -348,6 +348,12 @@ export function forceDirectedGraph(config: ForceGraphConfig): Map<string, Pos> {
   }
 
   const result = new Map<string, Pos>()
-  names.forEach((name, i) => result.set(name, { x: Math.round(px[i]), y: Math.round(py[i]) }))
+  names.forEach((name, i) => result.set(name, { x: px[i], y: py[i] }))
   return result
+}
+
+export function roundPositions(pos: Map<string, Pos>): Map<string, Pos> {
+  const out = new Map<string, Pos>()
+  for (const [name, { x, y }] of pos) out.set(name, { x: Math.round(x), y: Math.round(y) })
+  return out
 }
